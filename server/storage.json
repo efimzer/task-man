@@ -2,8 +2,8 @@
   "states": {
     "efimzer": {
       "meta": {
-        "version": 270,
-        "updatedAt": 1758900231251
+        "version": 302,
+        "updatedAt": 1758904060361
       },
       "folders": [
         {
@@ -41,12 +41,75 @@
           "folderId": "id-mg0y9ppz-b61dd117ca5248",
           "createdAt": 1758897704609,
           "order": 1
+        },
+        {
+          "id": "id-mg10inph-ece0bf4b5f19a8",
+          "title": "Молоко",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758901464197,
+          "order": 2
+        },
+        {
+          "id": "id-mg10iyj3-58fd228e9402d8",
+          "title": "Курица",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758901478223,
+          "order": 3
+        },
+        {
+          "id": "id-mg10jb4t-027eb398cc5948",
+          "title": "Мяско",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758901494557,
+          "order": 4
+        },
+        {
+          "id": "id-mg10jkn7-05581a81fc16c",
+          "title": "Сыр",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758901506883,
+          "order": 5
+        },
+        {
+          "id": "id-mg10k3ot-e05c2e7c1145",
+          "title": "Рыбка",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758901531565,
+          "order": 6
+        },
+        {
+          "id": "id-mg10kurv-98a5bafeb594f",
+          "title": "Кабачок",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758901566667,
+          "order": 7
+        },
+        {
+          "id": "id-mg10kz0k-f6b33699abc568",
+          "title": "Черри",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758901572164,
+          "order": 8
+        },
+        {
+          "id": "id-mg10l43f-df7e4fb4a59eb8",
+          "title": "Авакадо",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758901578747,
+          "order": 9
+        },
+        {
+          "id": "id-mg10lcmo-5cbc4e5c0d74e",
+          "title": "Бананы",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758901589809,
+          "order": 10
         }
       ],
       "archivedTasks": [],
       "ui": {
-        "selectedFolderId": "id-mg0y9ppz-b61dd117ca5248",
-        "activeScreen": "folders",
+        "selectedFolderId": "all",
+        "activeScreen": "tasks",
         "priorityFilter": "all"
       }
     }
