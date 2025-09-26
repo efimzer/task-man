@@ -4,12 +4,15 @@ import cookieParser from 'cookie-parser';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { join, dirname } from 'node:path';
+import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 
 const PORT = process.env.PORT || 8787;
 const DATA_FILE = process.env.TODO_SYNC_DB || join(process.cwd(), 'server', 'storage.json');
+const DATA_DIR = dirname(DATA_FILE);
+mkdirSync(DATA_DIR, { recursive: true });
 const AUTH_TOKEN = process.env.TODO_SYNC_TOKEN || null;
 const SESSION_COOKIE = process.env.TODO_SESSION_COOKIE || 'todo_session';
 const SESSION_TTL_MS = Number(process.env.TODO_SESSION_TTL || 1000 * 60 * 60 * 24 * 7 * 4);
@@ -106,7 +109,12 @@ function touchSession(session) {
 }
 
 async function persist() {
-  await db.write();
+  try {
+    await db.write();
+  } catch (error) {
+    console.error('Failed to persist database:', error);
+    throw error;
+  }
 }
 
 function setSessionCookie(res, sessionId) {
