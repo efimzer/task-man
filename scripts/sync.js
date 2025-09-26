@@ -45,6 +45,16 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   const parsedDebounce = Number(syncConfig.pushDebounceMs);
   const debounceMs = Number.isFinite(parsedDebounce) ? Math.max(50, parsedDebounce) : DEFAULT_DEBOUNCE;
 
+  let includeCredentials = Boolean(syncConfig.useSessionAuth);
+  if (!includeCredentials && typeof window !== 'undefined' && baseUrl) {
+    try {
+      const target = new URL(baseUrl, window.location.origin);
+      includeCredentials = target.origin === window.location.origin;
+    } catch (error) {
+      includeCredentials = false;
+    }
+  }
+
   const headers = { 'Content-Type': 'application/json' };
   if (syncConfig.authToken) {
     headers.Authorization = `Bearer ${syncConfig.authToken}`;
@@ -103,7 +113,8 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
 
     try {
       const response = await fetch(stateUrl(), {
-        headers
+        headers,
+        ...(includeCredentials ? { credentials: 'include' } : {})
       });
 
       if (response.status === 404) {
@@ -173,7 +184,8 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
       const response = await fetch(stateUrl(), {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ state: payload })
+        body: JSON.stringify({ state: payload }),
+        ...(includeCredentials ? { credentials: 'include' } : {})
       });
 
       if (!response.ok) {
