@@ -21,13 +21,24 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
+function extractToken(req) {
+  const header = req.get('authorization');
+  if (header && header.startsWith('Bearer ')) {
+    return header.slice('Bearer '.length);
+  }
+  if (req.query?.token) {
+    return req.query.token;
+  }
+  return null;
+}
+
 function isAuthorized(req, res) {
   if (!AUTH_TOKEN) {
     return true;
   }
 
-  const header = req.get('authorization');
-  if (header && header === `Bearer ${AUTH_TOKEN}`) {
+  const provided = extractToken(req);
+  if (provided && provided === AUTH_TOKEN) {
     return true;
   }
 

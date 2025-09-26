@@ -50,6 +50,18 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     headers.Authorization = `Bearer ${syncConfig.authToken}`;
   }
 
+  const tokenQuery = syncConfig.authToken && syncConfig.authTokenInQuery
+    ? `token=${encodeURIComponent(syncConfig.authToken)}`
+    : '';
+
+  const stateUrl = () => {
+    const path = `${baseUrl}/state/${encodeURIComponent(syncConfig.userId)}`;
+    if (!tokenQuery) {
+      return path;
+    }
+    return path.includes('?') ? `${path}&${tokenQuery}` : `${path}?${tokenQuery}`;
+  };
+
   let pollInterval = null;
   if (syncConfig?.pullIntervalMs === undefined || syncConfig?.pullIntervalMs === null) {
     pollInterval = DEFAULT_PULL_INTERVAL;
@@ -90,7 +102,7 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     setStatus({});
 
     try {
-      const response = await fetch(`${baseUrl}/state/${encodeURIComponent(syncConfig.userId)}`, {
+      const response = await fetch(stateUrl(), {
         headers
       });
 
@@ -158,7 +170,7 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     setStatus({});
 
     try {
-      const response = await fetch(`${baseUrl}/state/${encodeURIComponent(syncConfig.userId)}`, {
+      const response = await fetch(stateUrl(), {
         method: 'PUT',
         headers,
         body: JSON.stringify({ state: payload })
