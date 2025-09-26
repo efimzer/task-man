@@ -1,3 +1,54 @@
 {
-  "states": {}
+  "states": {
+    "efimzer": {
+      "meta": {
+        "version": 270,
+        "updatedAt": 1758900231251
+      },
+      "folders": [
+        {
+          "id": "all",
+          "name": "Все"
+        },
+        {
+          "id": "inbox",
+          "name": "Основные"
+        },
+        {
+          "id": "personal",
+          "name": "Личное"
+        },
+        {
+          "id": "id-mg0y9ppz-b61dd117ca5248",
+          "name": "Список покупок"
+        },
+        {
+          "id": "archive",
+          "name": "Архив"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "id-mg0y9xta-826b14fdaeee3",
+          "title": "Пиво",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758897698158,
+          "order": 0
+        },
+        {
+          "id": "id-mg0ya2sh-c520156d0bf848",
+          "title": "Чипсы",
+          "folderId": "id-mg0y9ppz-b61dd117ca5248",
+          "createdAt": 1758897704609,
+          "order": 1
+        }
+      ],
+      "archivedTasks": [],
+      "ui": {
+        "selectedFolderId": "id-mg0y9ppz-b61dd117ca5248",
+        "activeScreen": "folders",
+        "priorityFilter": "all"
+      }
+    }
+  }
 }

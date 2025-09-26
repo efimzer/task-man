@@ -278,6 +278,11 @@ function handleGlobalKeydown(event) {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     render();
+    if (syncManager?.enabled && typeof syncManager.pullLatest === 'function') {
+      syncManager.pullLatest({ skipIfUnchanged: true }).catch((error) => {
+        console.warn('Todo sync: visibility pull failed', error);
+      });
+    }
   }
 });
 
@@ -1141,8 +1146,19 @@ syncManager = createSyncManager({
   applyRemoteState
 });
 
-if (syncManager.enabled && syncConfig.pullOnStartup !== false) {
-  await syncManager.pullInitial();
+if (syncManager.enabled) {
+  let initialResult = null;
+  if (syncConfig.pullOnStartup !== false) {
+    initialResult = await syncManager.pullInitial();
+  }
+
+  if (typeof syncManager.startPolling === 'function') {
+    syncManager.startPolling();
+  }
+
+  if (initialResult?.notFound) {
+    await syncManager.forcePush();
+  }
 }
 
 render();
