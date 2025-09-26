@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f1f4ff" />
+    <title>Todo — веб</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="stylesheet" href="../styles/theme-light.css" />
+    <link rel="stylesheet" href="../styles/theme-dark.css" />
+    <link rel="stylesheet" href="../styles/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section id="screenFolders" class="screen screen-folders is-active">
+        <header class="screen-header">
+          <h1 class="screen-title">To Do</h1>
+          <button id="openFolderModal" class="icon-button primary" aria-label="Создать папку">＋</button>
+        </header>
+        <ul id="folderList" class="card-list" role="list"></ul>
+      </section>
+
+      <section id="screenTasks" class="screen screen-tasks" aria-live="polite">
+        <header class="tasks-header">
+          <button id="backToFolders" class="back-button" aria-label="Назад к списку папок"><span class="back-icon"></span></button>
+          <div class="tasks-heading">
+            <h2 id="tasksHeaderTitle" class="tasks-title">Задачи</h2>
+          </div>
+          <button id="addTaskInline" class="icon-button primary" aria-label="Добавить задачу">＋</button>
+        </header>
+        <div class="tasks-scroll">
+          <ul id="taskList" class="task-list" role="list"></ul>
+          <div id="emptyState" class="empty-state">
+            <p class="empty-message">Задач пока нет</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <template id="folderTemplate">
+      <li class="entry-card folder-item" data-folder-id="" tabindex="0" role="button">
+        <div class="folder-content">
+          <span class="folder-name"></span>
+          <span class="folder-count badge"></span>
+        </div>
+        <button class="folder-menu-button" aria-label="Дополнительные действия" type="button">⋮</button>
+      </li>
+    </template>
+
+    <template id="taskTemplate">
+      <li class="entry-card task-item" data-task-id="" draggable="true">
+        <span class="drag-handle" role="presentation" aria-hidden="true">⋮⋮</span>
+        <label class="checkbox">
+          <input type="checkbox" aria-label="Отметить задачу выполненной" />
+          <span class="checkbox-visual"></span>
+        </label>
+        <div class="task-body">
+          <span class="task-title" tabindex="0"></span>
+          <span class="task-folder-label"></span>
+        </div>
+        <button class="icon-button primary task-remove" aria-label="Удалить задачу из архива" type="button"><span class="icon-plus icon-plus-rotate">＋</span></button>
+      </li>
+    </template>
+
+    <div id="folderMenu" class="folder-menu hidden" role="menu">
+      <button type="button" class="folder-menu-item" data-action="rename">Переименовать</button>
+      <button type="button" class="folder-menu-item" data-action="delete">Удалить</button>
+    </div>
+
+    <div id="modalBackdrop" class="modal-backdrop hidden"></div>
+    <section id="folderModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="folderModalTitle">
+      <div class="modal-card">
+        <header class="modal-header">
+          <h2 id="folderModalTitle" class="modal-title">Новая папка</h2>
+        </header>
+        <form id="folderModalForm" class="modal-body" autocomplete="off">
+          <label class="field">
+            <input id="folderModalInput" type="text" class="input" maxlength="60" />
+          </label>
+          <footer class="modal-actions">
+            <button type="button" id="folderModalCancel" class="ghost-button">Отмена</button>
+            <button type="submit" class="primary-button">Сохранить</button>
+          </footer>
+        </form>
+      </div>
+    </section>
+
+    <script type="module" src="../scripts/sidepanel.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('./sw.js').catch((error) => {
+            console.warn('Service worker registration failed', error);
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
