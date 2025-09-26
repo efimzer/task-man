@@ -14,7 +14,7 @@
       <section id="screenFolders" class="screen screen-folders is-active">
         <header class="screen-header">
           <h1 class="screen-title">To Do</h1>
-          <button id="openFolderModal" class="icon-button primary" aria-label="Создать папку">＋</button>
+          <button class="icon-button primary app-menu-button" aria-label="Меню приложения" type="button">⋮</button>
         </header>
         <ul id="folderList" class="card-list" role="list"></ul>
       </section>
@@ -25,7 +25,7 @@
           <div class="tasks-heading">
             <h2 id="tasksHeaderTitle" class="tasks-title">Задачи</h2>
           </div>
-          <button id="addTaskInline" class="icon-button primary" aria-label="Добавить задачу">＋</button>
+          <button class="icon-button primary app-menu-button" aria-label="Меню приложения" type="button">⋮</button>
         </header>
         <div class="tasks-scroll">
           <ul id="taskList" class="task-list" role="list"></ul>
@@ -66,6 +66,10 @@
       <button type="button" class="folder-menu-item" data-action="delete">Удалить</button>
     </div>
 
+    <div id="appMenu" class="folder-menu app-menu hidden" role="menu">
+      <button type="button" id="logoutAction" class="folder-menu-item">Выйти</button>
+    </div>
+
     <div id="modalBackdrop" class="modal-backdrop hidden"></div>
     <section id="folderModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="folderModalTitle">
       <div class="modal-card">
@@ -83,6 +87,8 @@
         </form>
       </div>
     </section>
+
+    <button id="floatingActionButton" class="fab" type="button" aria-label="Добавить">＋</button>
 
     <script type="module" src="scripts/sidepanel.js"></script>
   </body>
