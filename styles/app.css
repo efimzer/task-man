@@ -9,8 +9,10 @@ body {
   margin: 0;
   min-height: 100vh;
   padding: 16px;
+  padding-bottom: 110px;
   display: flex;
   justify-content: center;
+  position: relative;
   transition: background 0.6s ease, color 0.4s ease;
 }
 
@@ -58,6 +60,11 @@ body {
   margin-top: 30px;
   justify-content: space-between;
   gap: 16px;
+}
+
+.app-menu-button {
+  font-size: 20px;
+  line-height: 1;
 }
 
 .screen-title,
@@ -562,6 +569,55 @@ body {
 .folder-menu-item:hover {
   background: var(--accent-neutral);
   color: var(--text-primary);
+}
+
+.app-menu {
+  right: auto;
+}
+
+.fab {
+  position: fixed;
+  right: 26px;
+  bottom: 28px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: #0095e5;
+  color: white;
+  border: none;
+  display: grid;
+  place-items: center;
+  font-size: 32px;
+  font-weight: 400;
+  box-shadow: 0 20px 40px rgba(0, 149, 229, 0.35);
+  cursor: pointer;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, opacity 0.2s ease;
+  z-index: 1200;
+}
+
+.fab:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 24px 44px rgba(0, 149, 229, 0.4);
+}
+
+.fab:active {
+  transform: scale(0.96);
+}
+
+.fab.is-hidden {
+  opacity: 0;
+  transform: scale(0.8);
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .fab {
+    width: 56px;
+    height: 56px;
+    font-size: 28px;
+    right: 20px;
+    bottom: 24px;
+  }
 }
 
 .modal-backdrop {

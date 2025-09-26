@@ -173,11 +173,13 @@ function requireSession(req, res, next) {
   if (req.user) {
     return next();
   }
-  if (req.accepts('json')) {
-    res.status(401).json({ error: 'AUTH_REQUIRED' });
-  } else {
+  const acceptHeader = req.headers.accept || '';
+  const wantsHtml = /text\/html|\*/i.test(acceptHeader);
+  if (req.method === 'GET' && wantsHtml) {
     res.redirect(`/auth/?next=${encodeURIComponent(req.originalUrl || '/web/')}`);
+    return;
   }
+  res.status(401).json({ error: 'AUTH_REQUIRED' });
 }
 
 function hasToken(req) {

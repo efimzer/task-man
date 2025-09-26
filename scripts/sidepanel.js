@@ -187,7 +187,6 @@ const elements = {
   screenTasks: document.getElementById('screenTasks'),
   folderList: document.getElementById('folderList'),
   folderTemplate: document.getElementById('folderTemplate'),
-  openFolderModal: document.getElementById('openFolderModal'),
   folderMenu: document.getElementById('folderMenu'),
   modalBackdrop: document.getElementById('modalBackdrop'),
   folderModal: document.getElementById('folderModal'),
@@ -199,7 +198,10 @@ const elements = {
   emptyState: document.getElementById('emptyState'),
   backButton: document.getElementById('backToFolders'),
   tasksHeaderTitle: document.getElementById('tasksHeaderTitle'),
-  addTaskInline: document.getElementById('addTaskInline')
+  appMenuButtons: Array.from(document.querySelectorAll('.app-menu-button')),
+  appMenu: document.getElementById('appMenu'),
+  logoutAction: document.getElementById('logoutAction'),
+  floatingActionButton: document.getElementById('floatingActionButton')
 };
 
 let currentScreen = null;
@@ -214,7 +216,11 @@ const folderMenuState = {
   folderId: null
 };
 
-elements.openFolderModal.addEventListener('click', openFolderModal);
+const appMenuState = {
+  visible: false,
+  anchor: null
+};
+
 elements.folderModalForm.addEventListener('submit', handleFolderModalSubmit);
 elements.folderModalCancel.addEventListener('click', closeFolderModal);
 elements.modalBackdrop.addEventListener('click', closeFolderModal);
@@ -223,10 +229,22 @@ elements.folderList.addEventListener('click', handleFolderClick);
 elements.folderList.addEventListener('keydown', handleFolderKeydown);
 elements.folderMenu.addEventListener('click', handleFolderMenuClick);
 document.addEventListener('click', handleDocumentClick, true);
-window.addEventListener('resize', closeFolderMenu);
-document.addEventListener('scroll', closeFolderMenu, true);
+window.addEventListener('resize', () => {
+  closeFolderMenu();
+  closeAppMenu();
+});
+document.addEventListener('scroll', () => {
+  closeFolderMenu();
+  closeAppMenu();
+}, true);
 
-elements.addTaskInline.addEventListener('click', handleAddTaskInline);
+elements.appMenuButtons.forEach((button) => {
+  button?.addEventListener('click', handleAppMenuToggle);
+});
+elements.logoutAction?.addEventListener('click', handleLogoutAction);
+elements.floatingActionButton?.addEventListener('click', handleFloatingActionClick);
+document.addEventListener('click', handleAppMenuDocumentClick, true);
+
 elements.taskList.addEventListener('click', handleTaskListClick);
 elements.taskList.addEventListener('change', handleTaskChange);
 elements.taskList.addEventListener('dblclick', handleTaskDblClick);
@@ -240,9 +258,14 @@ elements.backButton.addEventListener('click', () => showScreen('folders'));
 document.addEventListener('keydown', handleGlobalKeydown);
 
 function handleGlobalKeydown(event) {
-  if (event.key === 'Escape' && !elements.folderModal.classList.contains('hidden')) {
-    event.preventDefault();
-    closeFolderModal();
+  if (event.key === 'Escape') {
+    if (appMenuState.visible) {
+      closeAppMenu();
+    }
+    if (!elements.folderModal.classList.contains('hidden')) {
+      event.preventDefault();
+      closeFolderModal();
+    }
     return;
   }
 
@@ -298,6 +321,7 @@ function showScreen(screenName, { skipPersist = false } = {}) {
   const entering = screenName === 'folders' ? elements.screenFolders : elements.screenTasks;
   const leaving = screenName === 'folders' ? elements.screenTasks : elements.screenFolders;
 
+  closeAppMenu();
   currentScreen = screenName;
 
   if (leaving && leaving !== entering) {
@@ -322,6 +346,7 @@ function showScreen(screenName, { skipPersist = false } = {}) {
     persistState();
   }
   renderFolders();
+  updateFloatingAction();
 }
 
 function openFolderModal() {
@@ -461,6 +486,7 @@ function deleteFolder(folderId) {
 }
 
 function openFolderMenu(folderId, anchor) {
+  closeAppMenu();
   folderMenuState.visible = true;
   folderMenuState.folderId = folderId;
   folderMenuAnchor = anchor;
@@ -481,6 +507,94 @@ function closeFolderMenu() {
   elements.folderMenu.classList.add('hidden');
 }
 
+function openAppMenu(anchor) {
+  appMenuState.visible = true;
+  appMenuState.anchor = anchor;
+
+  const menu = elements.appMenu;
+  menu.classList.remove('hidden');
+
+  const rect = anchor.getBoundingClientRect();
+  const width = menu.offsetWidth;
+  const offsetTop = rect.bottom + window.scrollY + 8;
+  const computedLeft = rect.right + window.scrollX - width;
+  const maxLeft = document.body.clientWidth - width - 16;
+  const minLeft = 16;
+
+  menu.style.top = `${offsetTop}px`;
+  menu.style.right = 'auto';
+  menu.style.left = `${Math.max(Math.min(computedLeft, maxLeft), minLeft)}px`;
+}
+
+function closeAppMenu() {
+  appMenuState.visible = false;
+  appMenuState.anchor = null;
+  elements.appMenu.classList.add('hidden');
+}
+
+function handleAppMenuToggle(event) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const anchor = event.currentTarget;
+  if (appMenuState.visible && appMenuState.anchor === anchor) {
+    closeAppMenu();
+    return;
+  }
+  openAppMenu(anchor);
+}
+
+function handleAppMenuDocumentClick(event) {
+  if (!appMenuState.visible) {
+    return;
+  }
+
+  if (appMenuState.anchor?.contains(event.target)) {
+    return;
+  }
+
+  if (elements.appMenu.contains(event.target)) {
+    return;
+  }
+
+  closeAppMenu();
+}
+
+async function handleLogoutAction(event) {
+  event.preventDefault();
+  closeAppMenu();
+
+  let logoutUrl = '/api/auth/logout';
+  let redirectUrl = '/auth/';
+
+  if (syncConfig?.baseUrl) {
+    try {
+      const target = new URL(syncConfig.baseUrl, window.location.origin);
+      logoutUrl = `${target.origin}/api/auth/logout`;
+      redirectUrl = `${target.origin}/auth/`;
+    } catch (error) {
+      console.warn('Todo sync: unable to resolve logout URL from config', error);
+    }
+  }
+
+  try {
+    await fetch(logoutUrl, { method: 'POST', credentials: 'include' });
+  } catch (error) {
+    console.warn('Todo sync: logout failed', error);
+  } finally {
+    window.location.href = redirectUrl;
+  }
+}
+
+function handleFloatingActionClick() {
+  closeAppMenu();
+  if (currentScreen === 'folders') {
+    openFolderModal();
+  } else if (currentScreen === 'tasks') {
+    handleAddTaskInline();
+  }
+}
+
 function selectFolder(folderId, { openTasks = false, skipPersist = false } = {}) {
   if (!state.folders.some((folder) => folder.id === folderId)) {
     return;
@@ -497,7 +611,6 @@ function selectFolder(folderId, { openTasks = false, skipPersist = false } = {})
 
 function handleAddTaskInline() {
   if (state.ui.selectedFolderId === ALL_FOLDER_ID || state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
-    elements.addTaskInline.classList.add('is-disabled');
     return;
   }
 
@@ -1079,15 +1192,43 @@ function renderTasks() {
   const folder = state.folders.find((item) => item.id === selectedFolder);
   elements.tasksHeaderTitle.textContent = folder?.name ?? 'Папка';
 
-  const disableAdd = isAllFolder || selectedFolder === ARCHIVE_FOLDER_ID;
-  elements.addTaskInline.disabled = disableAdd;
-  elements.addTaskInline.classList.toggle('is-disabled', disableAdd);
-  elements.addTaskInline.style.display = disableAdd ? 'none' : 'grid';
-
   if (lastCreatedTaskId) {
     focusTaskTitle(lastCreatedTaskId);
     lastCreatedTaskId = null;
   }
+
+  updateFloatingAction();
+}
+
+function updateFloatingAction() {
+  const fab = elements.floatingActionButton;
+  if (!fab) {
+    return;
+  }
+
+  if (currentScreen === 'folders') {
+    fab.classList.remove('is-hidden');
+    fab.dataset.mode = 'folder';
+    fab.setAttribute('aria-label', 'Создать папку');
+    fab.textContent = '＋';
+    return;
+  }
+
+  if (currentScreen === 'tasks') {
+    const selectedFolder = state.ui.selectedFolderId;
+    const disableAdd = selectedFolder === ALL_FOLDER_ID || selectedFolder === ARCHIVE_FOLDER_ID;
+    if (disableAdd) {
+      fab.classList.add('is-hidden');
+    } else {
+      fab.classList.remove('is-hidden');
+      fab.dataset.mode = 'task';
+      fab.setAttribute('aria-label', 'Добавить задачу');
+      fab.textContent = '＋';
+    }
+    return;
+  }
+
+  fab.classList.add('is-hidden');
 }
 
 function getFolderName(folderId) {
@@ -1139,6 +1280,7 @@ function createTask({ title }) {
 function render() {
   renderFolders();
   renderTasks();
+  updateFloatingAction();
 }
 
 syncManager = createSyncManager({
