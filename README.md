@@ -18,15 +18,16 @@ npm install
 ## Настройка синхронизации
 1. Отредактируйте файл `scripts/sync-config.js` и задайте свои параметры:
    ```js
-   export const syncConfig = {
-     enabled: true,
-     baseUrl: 'https://example.com', // адрес вашего sync-сервера
-     userId: 'my-user',              // любой уникальный идентификатор
-     authToken: 'секрет-токен',      // необязательно, но рекомендуется
-     pullOnStartup: true,
-     pushDebounceMs: 1500,
-     pullIntervalMs: 2500          // как часто подтягивать обновления (мс)
-   };
+    export const syncConfig = {
+      enabled: true,
+      baseUrl: 'https://example.com', // адрес вашего sync-сервера
+      userId: 'my-user',              // любой уникальный идентификатор
+      authToken: 'секрет-токен',      // необязательно, но рекомендуется
+      authTokenInQuery: false,        // добавить ?token=... к запросам
+      pullOnStartup: true,
+      pushDebounceMs: 1500,
+      pullIntervalMs: 2500          // как часто подтягивать обновления (мс)
+    };
    ```
 2. Запустите сервер синхронизации локально:
    ```bash
@@ -62,6 +63,7 @@ npm install
 - Файл `server/storage.json` можно резервировать или заменить на любую БД по вашему желанию — главное, чтобы API сохранял и отдавал объект состояния целиком.
 - Поле `pullIntervalMs` в конфиге отвечает за периодичность фонового опроса сервера; значение 500–1000 мс даёт почти мгновенную синхронизацию.
 - Для iOS рекомендации Apple соблюдены — в `web/index.html` подключён `check-ios.png` как `apple-touch-icon` (180×180).
+- Если нужно открывать API в браузере без ручной установки заголовков, включите `authTokenInQuery` (и/или добавьте `?token=...` к адресу) — сервер теперь принимает токен как в заголовке `Authorization`, так и в параметре запроса.
 
 ## Структура
 - `scripts/` — общий код интерфейса и синхронизации.
