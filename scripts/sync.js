@@ -1,6 +1,8 @@
 import { syncConfig } from './sync-config.js';
 
 const DEFAULT_DEBOUNCE = 1500;
+const DEFAULT_PULL_INTERVAL = 2500;
+const MIN_POLL_INTERVAL = 500;
 
 function normalizeBaseUrl(value) {
   if (!value) {
@@ -22,12 +24,17 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     return {
       enabled: false,
       async pullInitial() {
-        return false;
+        return { applied: false, notFound: false, skipped: true };
+      },
+      async pullLatest() {
+        return { applied: false, notFound: false, skipped: true };
       },
       schedulePush() {},
       async forcePush() {
         return false;
       },
+      startPolling() {},
+      stopPolling() {},
       getStatus() {
         return { enabled: false };
       }
@@ -35,13 +42,24 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   }
 
   const baseUrl = normalizeBaseUrl(syncConfig.baseUrl);
-  const debounceMs = Number.isFinite(syncConfig.pushDebounceMs)
-    ? Math.max(250, syncConfig.pushDebounceMs)
-    : DEFAULT_DEBOUNCE;
+  const parsedDebounce = Number(syncConfig.pushDebounceMs);
+  const debounceMs = Number.isFinite(parsedDebounce) ? Math.max(50, parsedDebounce) : DEFAULT_DEBOUNCE;
 
   const headers = { 'Content-Type': 'application/json' };
   if (syncConfig.authToken) {
     headers.Authorization = `Bearer ${syncConfig.authToken}`;
+  }
+
+  let pollInterval = null;
+  if (syncConfig?.pullIntervalMs === undefined || syncConfig?.pullIntervalMs === null) {
+    pollInterval = DEFAULT_PULL_INTERVAL;
+  } else {
+    const parsed = Number(syncConfig.pullIntervalMs);
+    if (Number.isFinite(parsed)) {
+      pollInterval = parsed > 0 ? Math.max(MIN_POLL_INTERVAL, parsed) : null;
+    } else {
+      pollInterval = DEFAULT_PULL_INTERVAL;
+    }
   }
 
   let pushTimer = null;
@@ -49,6 +67,7 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   let isPulling = false;
   let lastSyncedVersion = null;
   let lastError = null;
+  let pollTimer = null;
 
   function setStatus(status) {
     lastError = status?.error ?? null;
@@ -63,9 +82,9 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     }
   }
 
-  async function pullInitial() {
-    if (isPulling) {
-      return false;
+  async function pullLatest({ skipIfUnchanged = false } = {}) {
+    if (isPulling || isPushing) {
+      return { applied: false, notFound: false, skipped: true };
     }
     isPulling = true;
     setStatus({});
@@ -76,9 +95,9 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
       });
 
       if (response.status === 404) {
-        const current = getState();
+        const current = typeof getState === 'function' ? getState() : null;
         lastSyncedVersion = current?.meta?.version ?? null;
-        return false;
+        return { applied: false, notFound: true };
       }
 
       if (!response.ok) {
@@ -86,22 +105,39 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
       }
 
       const remoteState = await response.json();
-      if (remoteState?.meta?.version !== undefined) {
-        lastSyncedVersion = remoteState.meta.version;
+      const remoteVersion = remoteState?.meta?.version ?? null;
+      const previousVersion = lastSyncedVersion;
+
+      if (remoteVersion !== null && remoteVersion !== undefined) {
+        lastSyncedVersion = remoteVersion;
+      }
+
+      if (
+        skipIfUnchanged &&
+        remoteVersion !== null &&
+        previousVersion !== null &&
+        remoteVersion === previousVersion
+      ) {
+        return { applied: false, notFound: false };
       }
 
       if (typeof applyRemoteState === 'function') {
         applyRemoteState(remoteState);
       }
-      return true;
+
+      return { applied: true, notFound: false };
     } catch (error) {
       console.warn('Todo sync: unable to pull remote state', error);
       setStatus({ error });
-      return false;
+      return { applied: false, notFound: false, error };
     } finally {
       isPulling = false;
       setStatus({});
     }
+  }
+
+  async function pullInitial() {
+    return pullLatest({ skipIfUnchanged: false });
   }
 
   async function pushState({ force = false } = {}) {
@@ -160,6 +196,25 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     return pushState({ force: true });
   }
 
+  function startPolling() {
+    if (pollTimer || !pollInterval) {
+      return;
+    }
+
+    pollTimer = setInterval(() => {
+      pullLatest({ skipIfUnchanged: true }).catch((error) => {
+        console.warn('Todo sync: polling pull failed', error);
+      });
+    }, pollInterval);
+  }
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
   function getStatus() {
     return {
       enabled: true,
@@ -173,8 +228,11 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   return {
     enabled: true,
     pullInitial,
+    pullLatest,
     schedulePush,
     forcePush,
+    startPolling,
+    stopPolling,
     getStatus
   };
 }
