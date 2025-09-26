@@ -1,12 +1,20 @@
 import express from 'express';
 import cors from 'cors';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 
 const PORT = process.env.PORT || 8787;
 const DATA_FILE = process.env.TODO_SYNC_DB || join(process.cwd(), 'server', 'storage.json');
 const AUTH_TOKEN = process.env.TODO_SYNC_TOKEN || null;
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const rootDir = join(__dirname, '..');
+const webDir = join(rootDir, 'web');
+const scriptsDir = join(rootDir, 'scripts');
+const stylesDir = join(rootDir, 'styles');
+const iconsDir = join(rootDir, 'icons');
 
 const db = new Low(new JSONFile(DATA_FILE), { states: {} });
 await db.read();
@@ -20,6 +28,13 @@ if (!db.data.states) {
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+app.use('/web', express.static(webDir));
+app.use('/scripts', express.static(scriptsDir));
+app.use('/styles', express.static(stylesDir));
+app.use('/icons', express.static(iconsDir));
+app.get('/', (req, res) => {
+  res.redirect('/web/');
+});
 
 function extractToken(req) {
   const header = req.get('authorization');
