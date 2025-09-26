@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>To Do — Авторизация</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="auth-page">
+      <section class="auth-card">
+        <header class="auth-header">
+          <div class="auth-brand">
+            <span class="auth-logo">✓</span>
+            <h1>To Do Sync</h1>
+          </div>
+          <p class="auth-subtitle">Войдите в аккаунт или создайте новый, чтобы синхронизировать задачи.</p>
+        </header>
+
+        <nav class="auth-tabs" role="tablist" aria-label="Авторизация">
+          <button id="tabLogin" class="auth-tab is-active" data-mode="login" role="tab" aria-selected="true">
+            Вход
+          </button>
+          <button id="tabRegister" class="auth-tab" data-mode="register" role="tab" aria-selected="false">
+            Регистрация
+          </button>
+        </nav>
+
+        <div class="auth-content">
+          <form id="authForm" novalidate>
+            <div class="field">
+              <label class="label" for="email">Email</label>
+              <input id="email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required />
+            </div>
+
+            <div class="field">
+              <label class="label" for="password">Пароль</label>
+              <input id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" minlength="6" required />
+            </div>
+
+            <div id="confirmWrapper" class="field hidden">
+              <label class="label" for="confirmPassword">Повторите пароль</label>
+              <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" placeholder="••••••••" minlength="6" />
+            </div>
+
+            <p id="errorMessage" class="auth-error" role="alert"></p>
+            <p id="successMessage" class="auth-success" role="status"></p>
+
+            <button id="submitButton" type="submit" class="auth-submit">Войти</button>
+          </form>
+        </div>
+
+        <footer class="auth-footer">
+          <button id="logoutButton" class="auth-link hidden" type="button">Выйти</button>
+          <a href="/" class="auth-link">На главную</a>
+        </footer>
+      </section>
+
+      <aside class="auth-aside">
+        <div class="auth-illustration">
+          <h2>Доступ с любых устройств</h2>
+          <p>Сохраняйте и синхронизируйте задачи между расширением и мобильным браузером.</p>
+        </div>
+      </aside>
+    </main>
+
+    <script type="module" src="./auth.js"></script>
+  </body>
+</html>
