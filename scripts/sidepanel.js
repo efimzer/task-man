@@ -97,58 +97,8 @@ function cleanupLocalState(activeKey) {
 }
 
 async function bootstrapAuthContext() {
-  const hasChromeRuntime = typeof chrome !== 'undefined' && Boolean(chrome.runtime?.id);
-  const shouldUseSession = syncConfig.useSessionAuth !== false || !hasChromeRuntime;
-
-  if (shouldUseSession) {
-    syncConfig.useSessionAuth = true;
-    let assigned = false;
-    try {
-      const response = await fetch(buildApiUrl('/api/auth/me'), {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data?.authenticated && (data.user?.email || data.user?.id)) {
-          const userKey = normalizeUserKey(data.user.email || data.user.id);
-          if (userKey) {
-            syncConfig.userId = userKey;
-            storageKey = `${STORAGE_KEY}:${userKey}`;
-            try {
-              localStorage.setItem(USER_ID_STORAGE_KEY, userKey);
-            } catch (error) {
-              console.warn('Todo sync: unable to persist user id', error);
-            }
-            cleanupLocalState(storageKey);
-            assigned = true;
-          }
-        }
-      }
-    } catch (error) {
-      console.warn('Todo sync: unable to resolve auth context', error);
-    }
-    if (!assigned) {
-      syncConfig.userId = '';
-      storageKey = STORAGE_KEY;
-      try {
-        localStorage.removeItem(USER_ID_STORAGE_KEY);
-      } catch (error) {
-        /* ignore */
-      }
-      return;
-    }
-    return;
-  }
-
-  const tokenUser = normalizeUserKey(syncConfig.userId);
-  if (tokenUser) {
-    syncConfig.userId = tokenUser;
-    storageKey = `${STORAGE_KEY}:${tokenUser}`;
-    cleanupLocalState(storageKey);
-    return;
-  }
-
-  storageKey = STORAGE_KEY;
+  const userKey = normalizeUserKey(syncConfig.userId);
+  storageKey = userKey ? `${STORAGE_KEY}:${userKey}` : STORAGE_KEY;
   cleanupLocalState(storageKey);
 }
 
@@ -1522,4 +1472,3 @@ if (syncManager.enabled) {
 render();
 const initialScreen = state.ui.activeScreen === 'tasks' ? 'tasks' : 'folders';
 showScreen(initialScreen, { skipPersist: true });
-const USER_ID_STORAGE_KEY = 'todoAuthUserId';
