@@ -201,13 +201,21 @@ function ensureAuthAllowed(req, res) {
   return false;
 }
 
+function normalizeKey(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : null;
+}
+
 function resolveStateKey(req, paramUserId) {
-  if (req.user?.id) {
-    return `user:${req.user.id}`;
+  const emailKey = normalizeKey(req.user?.email);
+  if (emailKey) {
+    return emailKey;
   }
-  if (paramUserId) {
-    return paramUserId;
+
+  const paramKey = normalizeKey(paramUserId);
+  if (paramKey) {
+    return paramKey;
   }
+
   return null;
 }
 
@@ -353,7 +361,29 @@ app.get('/state/:userId', async (req, res) => {
     return;
   }
 
-  const record = db.data.states[key];
+  let record = db.data.states[key];
+
+  if (!record && req.user?.id) {
+    const legacyKeys = [
+      `user:${req.user.id}`,
+      req.user.id,
+      userId,
+      'shared'
+    ].map(normalizeKey).filter(Boolean);
+
+    const found = legacyKeys.find((legacy) => legacy && db.data.states[legacy]);
+    if (found) {
+      record = db.data.states[found];
+      db.data.states[key] = record;
+      legacyKeys.forEach((legacy) => {
+        if (legacy) {
+          db.data.states[legacy] = record;
+        }
+      });
+      await persist();
+    }
+  }
+
   if (!record) {
     res.status(404).json({ error: 'STATE_NOT_FOUND' });
     return;
@@ -383,6 +413,19 @@ app.put('/state/:userId', async (req, res) => {
   nextState.meta = ensureMeta(nextState, existing);
 
   db.data.states[key] = nextState;
+  if (req.user?.id) {
+    const legacyKeys = [
+      `user:${req.user.id}`,
+      req.user.id,
+      userId,
+      'shared'
+    ].map(normalizeKey).filter(Boolean);
+    legacyKeys.forEach((legacy) => {
+      if (legacy) {
+        db.data.states[legacy] = nextState;
+      }
+    });
+  }
   await persist();
 
   res.json({ ok: true, meta: nextState.meta });
