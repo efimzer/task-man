@@ -367,8 +367,7 @@ app.get('/state/:userId', async (req, res) => {
     const legacyKeys = [
       `user:${req.user.id}`,
       req.user.id,
-      userId,
-      'shared'
+      userId
     ].map(normalizeKey).filter(Boolean);
 
     const found = legacyKeys.find((legacy) => legacy && db.data.states[legacy]);
@@ -417,8 +416,7 @@ app.put('/state/:userId', async (req, res) => {
     const legacyKeys = [
       `user:${req.user.id}`,
       req.user.id,
-      userId,
-      'shared'
+      userId
     ].map(normalizeKey).filter(Boolean);
     legacyKeys.forEach((legacy) => {
       if (legacy) {
