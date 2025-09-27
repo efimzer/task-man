@@ -20,7 +20,7 @@
   --accent-neutral-strong: rgba(48, 55, 70, 0.16);
 
   --checkbox-border: rgba(34, 39, 53, 0.24);
-  --checkbox-checked-bg: #3f6ae0;
+  --checkbox-checked-bg: linear-gradient(160deg, #3f6ae0, #97a9db);
   --checkbox-checked-color: #f5f7ff;
 
   --danger-border: #d92d20;

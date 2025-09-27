@@ -201,6 +201,16 @@ function ensureAuthAllowed(req, res) {
   return false;
 }
 
+function resolveStateKey(req, paramUserId) {
+  if (req.user?.id) {
+    return `user:${req.user.id}`;
+  }
+  if (paramUserId) {
+    return paramUserId;
+  }
+  return null;
+}
+
 app.use('/auth', express.static(authDir));
 app.use('/web', requireSession, express.static(webDir));
 app.use('/scripts', requireSession, express.static(scriptsDir));
@@ -337,7 +347,13 @@ app.get('/state/:userId', async (req, res) => {
     return;
   }
   const { userId } = req.params;
-  const record = db.data.states[userId];
+  const key = resolveStateKey(req, userId);
+  if (!key) {
+    res.status(400).json({ error: 'USER_ID_REQUIRED' });
+    return;
+  }
+
+  const record = db.data.states[key];
   if (!record) {
     res.status(404).json({ error: 'STATE_NOT_FOUND' });
     return;
@@ -350,6 +366,11 @@ app.put('/state/:userId', async (req, res) => {
     return;
   }
   const { userId } = req.params;
+  const key = resolveStateKey(req, userId);
+  if (!key) {
+    res.status(400).json({ error: 'USER_ID_REQUIRED' });
+    return;
+  }
   const payload = req.body?.state;
 
   if (!payload || typeof payload !== 'object') {
@@ -358,10 +379,10 @@ app.put('/state/:userId', async (req, res) => {
   }
 
   const nextState = JSON.parse(JSON.stringify(payload));
-  const existing = db.data.states[userId];
+  const existing = db.data.states[key];
   nextState.meta = ensureMeta(nextState, existing);
 
-  db.data.states[userId] = nextState;
+  db.data.states[key] = nextState;
   await persist();
 
   res.json({ ok: true, meta: nextState.meta });

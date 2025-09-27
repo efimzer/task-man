@@ -11,10 +11,10 @@
       <section class="auth-card">
         <header class="auth-header">
           <div class="auth-brand">
-            <span class="auth-logo">✓</span>
-            <h1>To Do Sync</h1>
+            <!-- <span class="auth-logo">✓</span> -->
+            <h1>GoFimaGo!</h1>
           </div>
-          <p class="auth-subtitle">Войдите в аккаунт или создайте новый, чтобы синхронизировать задачи.</p>
+          <p class="auth-subtitle">Войдите в аккаунт или создайте новый</p>
         </header>
 
         <nav class="auth-tabs" role="tablist" aria-label="Авторизация">
@@ -30,17 +30,15 @@
           <form id="authForm" novalidate>
             <div class="field">
               <label class="label" for="email">Email</label>
-              <input id="email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required />
+              <input class="text-input" id="email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required />
             </div>
 
             <div class="field">
               <label class="label" for="password">Пароль</label>
-              <input id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" minlength="6" required />
-            </div>
-
-            <div id="confirmWrapper" class="field hidden">
-              <label class="label" for="confirmPassword">Повторите пароль</label>
-              <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" placeholder="••••••••" minlength="6" />
+              <div class="input-with-action">
+                <input class="text-input" id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" minlength="6" required />
+                <button id="togglePassword" type="button" class="toggle-password" aria-label="Показать пароль" aria-pressed="false"></button>
+              </div>
             </div>
 
             <p id="errorMessage" class="auth-error" role="alert"></p>
@@ -51,15 +49,18 @@
         </div>
 
         <footer class="auth-footer">
-          <button id="logoutButton" class="auth-link hidden" type="button">Выйти</button>
-          <a href="/" class="auth-link">На главную</a>
+          <!-- <button id="logoutButton" class="auth-link hidden" type="button">Выйти</button>
+          <a href="/" class="auth-link">На главную</a> -->
         </footer>
       </section>
 
       <aside class="auth-aside">
         <div class="auth-illustration">
-          <h2>Доступ с любых устройств</h2>
-          <p>Сохраняйте и синхронизируйте задачи между расширением и мобильным браузером.</p>
+          <img src="./gofima.png" alt="Gofima" class="auth-illustration-image" />
+          <div class="auth-illustration-copy">
+            <h2>Доступ с любых устройств</h2>
+            <p>Сохраняйте и синхронизируйте задачи между устройствами</p>
+          </div>
         </div>
       </aside>
     </main>
