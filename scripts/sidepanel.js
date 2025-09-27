@@ -1472,3 +1472,5 @@ if (syncManager.enabled) {
 render();
 const initialScreen = state.ui.activeScreen === 'tasks' ? 'tasks' : 'folders';
 showScreen(initialScreen, { skipPersist: true });
+
+document.querySelector('.app-shell')?.classList.add('is-ready');

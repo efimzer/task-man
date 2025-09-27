@@ -21,6 +21,14 @@ body {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.app-shell.is-ready {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .screen {

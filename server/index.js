@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
@@ -12,6 +13,8 @@ mkdirSync(dirname(DATA_FILE), { recursive: true });
 
 const BASIC_AUTH_USERNAME = process.env.BASIC_AUTH_USERNAME || '';
 const BASIC_AUTH_PASSWORD = process.env.BASIC_AUTH_PASSWORD || '';
+const SESSION_COOKIE = process.env.BASIC_SESSION_COOKIE || 'todo_basic_session';
+const SESSION_TTL = Number(process.env.BASIC_SESSION_TTL || 1000 * 60 * 60 * 24 * 7);
 
 const normalizeKey = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
 
@@ -35,26 +38,34 @@ if (!db.data.states) {
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser());
 
-function requireBasicAuth(req, res, next) {
+const expectedToken = BASIC_AUTH_USERNAME
+  ? Buffer.from(`${BASIC_AUTH_USERNAME}:${BASIC_AUTH_PASSWORD}`).toString('base64')
+  : '';
+
+function authorize(req, res, next) {
   if (!BASIC_AUTH_USERNAME) {
     req.authUser = null;
     return next();
   }
 
+  const cookieToken = req.cookies?.[SESSION_COOKIE];
+  if (cookieToken && cookieToken === expectedToken) {
+    req.authUser = normalizeKey(BASIC_AUTH_USERNAME);
+    return next();
+  }
+
   const header = req.get('authorization') || '';
   const [scheme, encoded] = header.split(' ');
-  if (scheme === 'Basic' && encoded) {
-    try {
-      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-      const [user = '', pass = ''] = decoded.split(':');
-      if (user === BASIC_AUTH_USERNAME && pass === BASIC_AUTH_PASSWORD) {
-        req.authUser = normalizeKey(user);
-        return next();
-      }
-    } catch (error) {
-      console.warn('Basic auth decode failed', error);
-    }
+  if (scheme === 'Basic' && encoded === expectedToken) {
+    res.cookie(SESSION_COOKIE, expectedToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: SESSION_TTL
+    });
+    req.authUser = normalizeKey(BASIC_AUTH_USERNAME);
+    return next();
   }
 
   res.set('WWW-Authenticate', 'Basic realm="To Do"');
@@ -69,7 +80,7 @@ const stylesDir = join(rootDir, 'styles');
 const iconsDir = join(rootDir, 'icons');
 const authDir = join(webDir, 'auth');
 
-app.use(requireBasicAuth);
+app.use(authorize);
 app.use('/web', express.static(webDir));
 app.use('/scripts', express.static(scriptsDir));
 app.use('/styles', express.static(stylesDir));
