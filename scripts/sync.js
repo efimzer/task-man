@@ -16,9 +16,7 @@ function cloneState(state) {
 }
 
 export function createSyncManager({ getState, applyRemoteState, onStatusChange } = {}) {
-  const enabled = Boolean(
-    syncConfig?.enabled && syncConfig.baseUrl && syncConfig.userId && typeof getState === 'function'
-  );
+  const enabled = Boolean(syncConfig?.enabled && syncConfig.baseUrl && typeof getState === 'function');
 
   if (!enabled) {
     return {
@@ -65,7 +63,8 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     : '';
 
   const stateUrl = () => {
-    const path = `${baseUrl}/state/${encodeURIComponent(syncConfig.userId)}`;
+    const effectiveUserId = syncConfig.userId || 'shared';
+    const path = `${baseUrl}/state/${encodeURIComponent(effectiveUserId)}`;
     if (!tokenQuery) {
       return path;
     }
@@ -128,6 +127,9 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
       }
 
       const remoteState = await response.json();
+      if (remoteState?.ui?.selectedFolderId && syncConfig.useSessionAuth) {
+        remoteState.ui.selectedFolderId = remoteState.ui.selectedFolderId.replace(/^inbox:[^:]+$/, 'inbox');
+      }
       const remoteVersion = remoteState?.meta?.version ?? null;
       const previousVersion = lastSyncedVersion;
 
@@ -176,6 +178,9 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     }
 
     const payload = cloneState(currentState);
+    if (payload?.ui && syncConfig.useSessionAuth && payload.ui.selectedFolderId === 'inbox') {
+      payload.ui.selectedFolderId = `inbox:${syncConfig.userId || 'shared'}`;
+    }
 
     isPushing = true;
     setStatus({});

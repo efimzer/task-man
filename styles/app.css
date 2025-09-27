@@ -510,7 +510,7 @@ body {
 }
 
 .empty-state {
-  margin-top: 56px;
+  /* margin-top: 36px; */
   text-align: center;
   font-size: 14px;
   color: var(--text-muted);
@@ -518,7 +518,8 @@ body {
 }
 
 .empty-state .empty-image,
-.empty-state .empty-message {
+.empty-state .empty-message,
+.empty-state .empty-illustration {
   opacity: 0;
   transform: translateY(8px);
 }
@@ -528,12 +529,21 @@ body {
 }
 
 .empty-state.visible .empty-image,
-.empty-state.visible .empty-message {
+.empty-state.visible .empty-message,
+.empty-state.visible .empty-illustration {
   animation: empty-fade-in 0.4s ease forwards;
 }
 
 .empty-state.visible .empty-message {
   animation-delay: 0.1s;
+}
+
+.empty-state .empty-illustration {
+  width: 180px;
+  max-width: none;
+  height: auto;
+  margin: 0 auto 16px;
+  display: block;
 }
 
 .folder-menu {
@@ -582,14 +592,15 @@ body {
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: #0095e5;
+  /* background: #0095e5; */
+  background: var(--checkbox-checked-bg);
   color: white;
   border: none;
   display: grid;
   place-items: center;
   font-size: 32px;
   font-weight: 400;
-  box-shadow: 0 20px 40px rgba(0, 149, 229, 0.35);
+  box-shadow: var(--shadow-soft);
   cursor: pointer;
   transition: transform 0.25s ease, box-shadow 0.25s ease, opacity 0.2s ease;
   z-index: 1200;
@@ -597,7 +608,7 @@ body {
 
 .fab:hover {
   transform: translateY(-1px) scale(1.02);
-  box-shadow: 0 24px 44px rgba(0, 149, 229, 0.4);
+  box-shadow: var(--shadow-strong);
 }
 
 .fab:active {

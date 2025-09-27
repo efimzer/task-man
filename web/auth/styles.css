@@ -99,7 +99,7 @@ body {
   padding: 10px 20px;
   border-radius: 10px;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 550;
   color: var(--text-secondary);
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease;
@@ -124,33 +124,97 @@ body {
 }
 
 .label {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 550;
   color: #3a3f54;
+  margin-top: 15px;
 }
 
-input[type="email"],
-input[type="password"] {
+.text-input {
   border: 1px solid rgba(67, 77, 110, 0.18);
   border-radius: 12px;
   padding: 14px 16px;
   font-size: 15px;
   background: rgba(255, 255, 255, 0.92);
   transition: border 0.2s ease, box-shadow 0.2s ease;
+  width: 100%;
+  display: block;
 }
 
-input[type="email"]:focus,
-input[type="password"]:focus {
+.text-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(77, 107, 255, 0.2);
   outline: none;
+}
+
+.input-with-action {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(67, 77, 110, 0.18);
+  transition: border 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input-with-action:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(77, 107, 255, 0.2);
+}
+
+.input-with-action .text-input {
+  border: none;
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-size: 15px;
+  background: transparent;
+  flex: 1;
+  width: 100%;
+  box-shadow: none;
+}
+
+.input-with-action .text-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.toggle-password {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  line-height: 1;
+  color: var(--text-secondary);
+  transition: color 0.2s ease;
+}
+
+.toggle-password svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.toggle-password:hover {
+  color: var(--accent);
+}
+
+.toggle-password.is-visible {
+  color: var(--accent-strong);
 }
 
 .auth-error,
 .auth-success {
   min-height: 20px;
   font-size: 13px;
-  margin: 0;
+  margin-top: 15px;
 }
 
 .auth-error {
@@ -162,17 +226,18 @@ input[type="password"]:focus {
 }
 
 .auth-submit {
-  margin-top: 4px;
+  margin-top: 16px;
   border: none;
   border-radius: 12px;
-  padding: 14px 16px;
+  padding: 14px 28px;
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 550;
   color: white;
   background: linear-gradient(120deg, #4d6bff 0%, #7d35ff 100%);
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
   box-shadow: 0 16px 30px rgba(77, 107, 255, 0.25);
+  margin-top: -40px;
 }
 
 .auth-submit:hover {
@@ -215,7 +280,20 @@ input[type="password"]:focus {
 }
 
 .auth-illustration {
-  max-width: 320px;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.auth-illustration-image {
+  width: clamp(120px, 32vw, 200px);
+  height: auto;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.auth-illustration-copy {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -271,5 +349,14 @@ input[type="password"]:focus {
 
   .auth-tab.is-active {
     background: rgba(19, 22, 33, 0.9);
+  }
+
+  .input-with-action {
+    background: rgba(28, 31, 45, 0.72);
+    border-color: rgba(105, 120, 165, 0.32);
+  }
+
+  .toggle-password {
+    color: rgba(196, 206, 255, 0.82);
   }
 }

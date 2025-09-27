@@ -7,6 +7,31 @@ const ARCHIVE_FOLDER_ID = 'archive';
 
 const hasChromeStorage = typeof chrome !== 'undefined' && chrome.storage?.local;
 let syncManager = null;
+let storageKey = STORAGE_KEY;
+
+function resolveAssetPath(extensionPath, { webPath } = {}) {
+  if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+    return chrome.runtime.getURL(extensionPath);
+  }
+  if (webPath) {
+    return webPath;
+  }
+  return extensionPath;
+}
+
+function buildApiUrl(path) {
+  if (!syncConfig.baseUrl) {
+    return path;
+  }
+
+  try {
+    const url = new URL(path, syncConfig.baseUrl);
+    return url.toString();
+  } catch (error) {
+    console.warn('Todo sync: unable to build API URL', error);
+    return path;
+  }
+}
 
 const defaultState = () => ({
   meta: {
@@ -36,10 +61,63 @@ const uid = () => {
 
 const safeClone = (value) => JSON.parse(JSON.stringify(value));
 
+async function bootstrapAuthContext() {
+  const hasChromeRuntime = typeof chrome !== 'undefined' && Boolean(chrome.runtime?.id);
+  const storedUserId = (() => {
+    try {
+      return localStorage.getItem(USER_ID_STORAGE_KEY) || '';
+    } catch (error) {
+      return '';
+    }
+  })();
+
+  const shouldUseSession = syncConfig.useSessionAuth !== false || !hasChromeRuntime;
+
+  if (shouldUseSession) {
+    syncConfig.useSessionAuth = true;
+    try {
+      const response = await fetch(buildApiUrl('/api/auth/me'), {
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data?.authenticated && data.user?.id) {
+          const userId = data.user.id;
+          syncConfig.userId = userId;
+          storageKey = `${STORAGE_KEY}:${userId}`;
+          try {
+            localStorage.setItem(USER_ID_STORAGE_KEY, userId);
+          } catch (error) {
+            console.warn('Todo sync: unable to persist user id', error);
+          }
+          return;
+        }
+      }
+    } catch (error) {
+      console.warn('Todo sync: unable to resolve auth context', error);
+    }
+
+    if (storedUserId) {
+      syncConfig.userId = storedUserId;
+      storageKey = `${STORAGE_KEY}:${storedUserId}`;
+      return;
+    }
+  }
+
+  if (syncConfig.userId) {
+    storageKey = `${STORAGE_KEY}:${syncConfig.userId}`;
+  } else if (storedUserId) {
+    syncConfig.userId = storedUserId;
+    storageKey = `${STORAGE_KEY}:${storedUserId}`;
+  } else {
+    storageKey = STORAGE_KEY;
+  }
+}
+
 async function loadState() {
   if (!hasChromeStorage) {
     try {
-      const raw = globalThis.localStorage?.getItem(STORAGE_KEY);
+      const raw = globalThis.localStorage?.getItem(storageKey);
       if (!raw) {
         return defaultState();
       }
@@ -51,8 +129,8 @@ async function loadState() {
   }
 
   try {
-    const stored = await chrome.storage.local.get(STORAGE_KEY);
-    const raw = stored?.[STORAGE_KEY];
+    const stored = await chrome.storage.local.get(storageKey);
+    const raw = stored?.[storageKey];
     if (!raw) {
       return defaultState();
     }
@@ -117,13 +195,13 @@ async function saveState(state, options = {}) {
 
   if (hasChromeStorage) {
     try {
-      await chrome.storage.local.set({ [STORAGE_KEY]: snapshot });
+      await chrome.storage.local.set({ [storageKey]: snapshot });
     } catch (error) {
       console.warn('Failed to persist state:', error);
     }
   } else if (globalThis.localStorage) {
     try {
-      globalThis.localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+      globalThis.localStorage.setItem(storageKey, JSON.stringify(snapshot));
     } catch (error) {
       console.warn('Failed to persist state to localStorage:', error);
     }
@@ -162,17 +240,25 @@ function applyRemoteState(remoteState) {
   }
 
   const normalized = normalizeState(remoteState);
+  const preservedUI = { ...state.ui };
 
   state.folders = normalized.folders;
   state.tasks = normalized.tasks;
   state.archivedTasks = normalized.archivedTasks;
-  state.ui = { ...state.ui, ...normalized.ui };
+  state.ui = {
+    ...normalized.ui,
+    ...preservedUI,
+    selectedFolderId: preservedUI.selectedFolderId ?? normalized.ui?.selectedFolderId,
+    activeScreen: preservedUI.activeScreen ?? normalized.ui?.activeScreen
+  };
   state.meta = normalized.meta;
 
   ensureAllFolder(state);
   saveState(state, { skipRemote: true, updateMeta: false });
   render();
 }
+
+await bootstrapAuthContext();
 
 const state = await loadState();
 ensureAllFolder(state);
@@ -201,6 +287,7 @@ const elements = {
   appMenuButtons: Array.from(document.querySelectorAll('.app-menu-button')),
   appMenu: document.getElementById('appMenu'),
   logoutAction: document.getElementById('logoutAction'),
+  clearArchiveAction: document.getElementById('clearArchiveAction'),
   floatingActionButton: document.getElementById('floatingActionButton')
 };
 
@@ -242,6 +329,7 @@ elements.appMenuButtons.forEach((button) => {
   button?.addEventListener('click', handleAppMenuToggle);
 });
 elements.logoutAction?.addEventListener('click', handleLogoutAction);
+elements.clearArchiveAction?.addEventListener('click', handleClearArchive);
 elements.floatingActionButton?.addEventListener('click', handleFloatingActionClick);
 document.addEventListener('click', handleAppMenuDocumentClick, true);
 
@@ -586,6 +674,26 @@ async function handleLogoutAction(event) {
   }
 }
 
+function handleClearArchive(event) {
+  event.preventDefault();
+  closeAppMenu();
+  if (!state.archivedTasks.length) {
+    return;
+  }
+
+  const confirmed = window.confirm('Очистить архив задач?');
+  if (!confirmed) {
+    return;
+  }
+
+  state.archivedTasks = [];
+  persistState();
+
+  if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+    render();
+  }
+}
+
 function handleFloatingActionClick() {
   closeAppMenu();
   if (currentScreen === 'folders') {
@@ -661,7 +769,7 @@ function createInlineComposer() {
   body.appendChild(input);
   item.append(checkbox, body, confirmButton);
 
-  const commit = () => commitInlineTask(input.value.trim());
+  const commit = (options = {}) => commitInlineTask(input.value.trim(), options);
   const cancel = () => {
     if (!input.value.trim()) {
       cancelInlineComposer();
@@ -671,10 +779,24 @@ function createInlineComposer() {
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
-      commit();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') {
+        event.stopImmediatePropagation();
+      }
+      commit({ continueEntry: true });
     } else if (event.key === 'Escape') {
       event.preventDefault();
       cancelInlineComposer(true);
+    }
+  });
+  input.addEventListener('keypress', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') {
+        event.stopImmediatePropagation();
+      }
+      commit({ continueEntry: true });
     }
   });
   input.addEventListener('input', () => clearInvalid(input));
@@ -698,7 +820,7 @@ function cancelInlineComposer(force = false) {
   }
 }
 
-function commitInlineTask(rawTitle) {
+function commitInlineTask(rawTitle, { continueEntry = false } = {}) {
   if (!inlineComposer) {
     return;
   }
@@ -713,6 +835,12 @@ function commitInlineTask(rawTitle) {
   composerElement.remove();
 
   createTask({ title: rawTitle });
+
+  if (continueEntry) {
+    requestAnimationFrame(() => {
+      handleAddTaskInline();
+    });
+  }
 }
 
 function handleTaskListClick(event) {
@@ -1021,7 +1149,49 @@ function syncTaskOrder() {
 }
 
 function handleEmptyState(hasTasks) {
-  elements.emptyState.classList.toggle('visible', !hasTasks);
+  if (!hasTasks) {
+    elements.emptyState.classList.add('visible');
+
+    const message = elements.emptyState.querySelector('.empty-message');
+    if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+      const illustration = elements.emptyState.querySelector('.empty-illustration');
+      if (illustration) {
+        illustration.remove();
+      }
+      if (message) {
+        message.textContent = 'Архив пуст';
+        message.style.display = '';
+        message.dataset.state = 'archive';
+      }
+      return;
+    }
+
+    let illustration = elements.emptyState.querySelector('.empty-illustration');
+    if (!illustration) {
+      illustration = document.createElement('img');
+      illustration.className = 'empty-illustration';
+      elements.emptyState.appendChild(illustration);
+    }
+    illustration.src = resolveAssetPath('icons/gofima_success.png', { webPath: './gofima_success.png' });
+    illustration.alt = 'Все задачи выполнены';
+
+    if (message) {
+      message.style.display = 'none';
+      message.dataset.state = 'tasks';
+    }
+  } else {
+    elements.emptyState.classList.remove('visible');
+    const illustration = elements.emptyState.querySelector('.empty-illustration');
+    if (illustration) {
+      illustration.remove();
+    }
+    const message = elements.emptyState.querySelector('.empty-message');
+    if (message) {
+      delete message.dataset.state;
+      message.style.display = '';
+      message.textContent = 'Задач пока нет';
+    }
+  }
 }
 
 function renderFolders() {
@@ -1299,6 +1469,14 @@ if (syncManager.enabled) {
   }
 
   if (initialResult?.notFound) {
+    const fresh = defaultState();
+    state.folders = fresh.folders;
+    state.tasks = fresh.tasks;
+    state.archivedTasks = fresh.archivedTasks;
+    state.ui = { ...state.ui, ...fresh.ui };
+    state.meta = { ...fresh.meta };
+    ensureAllFolder(state);
+    await saveState(state, { skipRemote: true, updateMeta: false });
     await syncManager.forcePush();
   }
 }
@@ -1306,3 +1484,4 @@ if (syncManager.enabled) {
 render();
 const initialScreen = state.ui.activeScreen === 'tasks' ? 'tasks' : 'folders';
 showScreen(initialScreen, { skipPersist: true });
+const USER_ID_STORAGE_KEY = 'todoAuthUserId';
