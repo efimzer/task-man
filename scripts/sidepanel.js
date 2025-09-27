@@ -61,11 +61,14 @@ const uid = () => {
 
 const safeClone = (value) => JSON.parse(JSON.stringify(value));
 
+const normalizeUserKey = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
+
 async function bootstrapAuthContext() {
   const hasChromeRuntime = typeof chrome !== 'undefined' && Boolean(chrome.runtime?.id);
   const storedUserId = (() => {
     try {
-      return localStorage.getItem(USER_ID_STORAGE_KEY) || '';
+      const raw = localStorage.getItem(USER_ID_STORAGE_KEY) || '';
+      return normalizeUserKey(raw);
     } catch (error) {
       return '';
     }
@@ -81,16 +84,18 @@ async function bootstrapAuthContext() {
       });
       if (response.ok) {
         const data = await response.json();
-        if (data?.authenticated && data.user?.id) {
-          const userId = data.user.id;
-          syncConfig.userId = userId;
-          storageKey = `${STORAGE_KEY}:${userId}`;
-          try {
-            localStorage.setItem(USER_ID_STORAGE_KEY, userId);
-          } catch (error) {
-            console.warn('Todo sync: unable to persist user id', error);
+        if (data?.authenticated && (data.user?.email || data.user?.id)) {
+          const userKey = normalizeUserKey(data.user.email || data.user.id);
+          if (userKey) {
+            syncConfig.userId = userKey;
+            storageKey = `${STORAGE_KEY}:${userKey}`;
+            try {
+              localStorage.setItem(USER_ID_STORAGE_KEY, userKey);
+            } catch (error) {
+              console.warn('Todo sync: unable to persist user id', error);
+            }
+            return;
           }
-          return;
         }
       }
     } catch (error) {
@@ -105,8 +110,20 @@ async function bootstrapAuthContext() {
   }
 
   if (syncConfig.userId) {
-    storageKey = `${STORAGE_KEY}:${syncConfig.userId}`;
-  } else if (storedUserId) {
+    const userKey = normalizeUserKey(syncConfig.userId);
+    if (userKey) {
+      syncConfig.userId = userKey;
+      storageKey = `${STORAGE_KEY}:${userKey}`;
+      try {
+        localStorage.setItem(USER_ID_STORAGE_KEY, userKey);
+      } catch (error) {
+        console.warn('Todo sync: unable to persist user id', error);
+      }
+      return;
+    }
+  }
+
+  if (storedUserId) {
     syncConfig.userId = storedUserId;
     storageKey = `${STORAGE_KEY}:${storedUserId}`;
   } else {
