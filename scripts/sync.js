@@ -127,9 +127,6 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
       }
 
       const remoteState = await response.json();
-      if (remoteState?.ui?.selectedFolderId && syncConfig.useSessionAuth) {
-        remoteState.ui.selectedFolderId = remoteState.ui.selectedFolderId.replace(/^inbox:[^:]+$/, 'inbox');
-      }
       const remoteVersion = remoteState?.meta?.version ?? null;
       const previousVersion = lastSyncedVersion;
 
@@ -178,9 +175,6 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     }
 
     const payload = cloneState(currentState);
-    if (payload?.ui && syncConfig.useSessionAuth && payload.ui.selectedFolderId === 'inbox') {
-      payload.ui.selectedFolderId = `inbox:${syncConfig.userId || 'shared'}`;
-    }
 
     isPushing = true;
     setStatus({});
