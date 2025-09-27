@@ -11,5 +11,5 @@ export const syncConfig = {
   },
   pullOnStartup: true,
   pushDebounceMs: 500,
-  pullIntervalMs: 1500
+  pullIntervalMs: 2500
 };
