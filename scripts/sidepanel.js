@@ -93,7 +93,6 @@ async function bootstrapAuthContext() {
     } catch (error) {
       console.warn('Todo sync: unable to resolve auth context', error);
     }
-
     if (!assigned) {
       syncConfig.userId = '';
       storageKey = STORAGE_KEY;
@@ -102,6 +101,7 @@ async function bootstrapAuthContext() {
       } catch (error) {
         /* ignore */
       }
+      return;
     }
     return;
   }

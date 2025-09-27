@@ -8,7 +8,12 @@ const ASSETS = [
   '../styles/app.css',
   '../scripts/sidepanel.js',
   '../scripts/sync.js',
-  '../scripts/sync-config.js'
+  '../scripts/sync-config.js',
+  '../icons/favicon_io/favicon-32x32.png',
+  '../icons/favicon_io/favicon-16x16.png',
+  '../icons/favicon_io/android-chrome-192x192.png',
+  '../icons/favicon_io/android-chrome-512x512.png',
+  '../icons/favicon_io/favicon.ico'
 ];
 
 self.addEventListener('install', (event) => {
