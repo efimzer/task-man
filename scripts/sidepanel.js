@@ -65,19 +65,11 @@ const normalizeUserKey = (value) => (typeof value === 'string' ? value.trim().to
 
 async function bootstrapAuthContext() {
   const hasChromeRuntime = typeof chrome !== 'undefined' && Boolean(chrome.runtime?.id);
-  const storedUserId = (() => {
-    try {
-      const raw = localStorage.getItem(USER_ID_STORAGE_KEY) || '';
-      return normalizeUserKey(raw);
-    } catch (error) {
-      return '';
-    }
-  })();
-
   const shouldUseSession = syncConfig.useSessionAuth !== false || !hasChromeRuntime;
 
   if (shouldUseSession) {
     syncConfig.useSessionAuth = true;
+    let assigned = false;
     try {
       const response = await fetch(buildApiUrl('/api/auth/me'), {
         credentials: 'include'
@@ -94,7 +86,7 @@ async function bootstrapAuthContext() {
             } catch (error) {
               console.warn('Todo sync: unable to persist user id', error);
             }
-            return;
+            assigned = true;
           }
         }
       }
@@ -102,33 +94,26 @@ async function bootstrapAuthContext() {
       console.warn('Todo sync: unable to resolve auth context', error);
     }
 
-    if (storedUserId) {
-      syncConfig.userId = storedUserId;
-      storageKey = `${STORAGE_KEY}:${storedUserId}`;
-      return;
-    }
-  }
-
-  if (syncConfig.userId) {
-    const userKey = normalizeUserKey(syncConfig.userId);
-    if (userKey) {
-      syncConfig.userId = userKey;
-      storageKey = `${STORAGE_KEY}:${userKey}`;
+    if (!assigned) {
+      syncConfig.userId = '';
+      storageKey = STORAGE_KEY;
       try {
-        localStorage.setItem(USER_ID_STORAGE_KEY, userKey);
+        localStorage.removeItem(USER_ID_STORAGE_KEY);
       } catch (error) {
-        console.warn('Todo sync: unable to persist user id', error);
+        /* ignore */
       }
-      return;
     }
+    return;
   }
 
-  if (storedUserId) {
-    syncConfig.userId = storedUserId;
-    storageKey = `${STORAGE_KEY}:${storedUserId}`;
-  } else {
-    storageKey = STORAGE_KEY;
+  const tokenUser = normalizeUserKey(syncConfig.userId);
+  if (tokenUser) {
+    syncConfig.userId = tokenUser;
+    storageKey = `${STORAGE_KEY}:${tokenUser}`;
+    return;
   }
+
+  storageKey = STORAGE_KEY;
 }
 
 async function loadState() {
