@@ -129,9 +129,18 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
       const remoteState = await response.json();
       const remoteVersion = remoteState?.meta?.version ?? null;
       const previousVersion = lastSyncedVersion;
+      const localVersion = typeof getState === 'function' ? getState()?.meta?.version ?? null : null;
 
       if (remoteVersion !== null && remoteVersion !== undefined) {
         lastSyncedVersion = remoteVersion;
+      }
+
+      if (
+        remoteVersion !== null &&
+        localVersion !== null &&
+        remoteVersion < localVersion
+      ) {
+        return { applied: false, notFound: false, skipped: true };
       }
 
       if (

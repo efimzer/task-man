@@ -6,6 +6,6 @@ export const syncConfig = {
   authTokenInQuery: true,
   useSessionAuth: false,
   pullOnStartup: true,
-  pushDebounceMs: 50,
+  pushDebounceMs: 100,
   pullIntervalMs: 500
 };
