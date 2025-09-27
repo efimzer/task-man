@@ -63,6 +63,39 @@ const safeClone = (value) => JSON.parse(JSON.stringify(value));
 
 const normalizeUserKey = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
 
+function cleanupLocalState(activeKey) {
+  try {
+    const prefix = `${STORAGE_KEY}`;
+    const removeKeys = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(prefix) && key !== activeKey) {
+        removeKeys.push(key);
+      }
+    }
+    removeKeys.forEach((key) => localStorage.removeItem(key));
+  } catch (error) {
+    console.warn('Todo sync: unable to cleanup local storage', error);
+  }
+
+  if (hasChromeStorage) {
+    chrome.storage.local.get(null, (items) => {
+      if (chrome.runtime.lastError) {
+        console.warn('Todo sync: unable to enumerate chrome storage', chrome.runtime.lastError);
+        return;
+      }
+      const remove = Object.keys(items || {}).filter((key) => key.startsWith(STORAGE_KEY) && key !== activeKey);
+      if (remove.length) {
+        chrome.storage.local.remove(remove, () => {
+          if (chrome.runtime.lastError) {
+            console.warn('Todo sync: unable to cleanup chrome storage', chrome.runtime.lastError);
+          }
+        });
+      }
+    });
+  }
+}
+
 async function bootstrapAuthContext() {
   const hasChromeRuntime = typeof chrome !== 'undefined' && Boolean(chrome.runtime?.id);
   const shouldUseSession = syncConfig.useSessionAuth !== false || !hasChromeRuntime;
@@ -86,6 +119,7 @@ async function bootstrapAuthContext() {
             } catch (error) {
               console.warn('Todo sync: unable to persist user id', error);
             }
+            cleanupLocalState(storageKey);
             assigned = true;
           }
         }
@@ -110,10 +144,12 @@ async function bootstrapAuthContext() {
   if (tokenUser) {
     syncConfig.userId = tokenUser;
     storageKey = `${STORAGE_KEY}:${tokenUser}`;
+    cleanupLocalState(storageKey);
     return;
   }
 
   storageKey = STORAGE_KEY;
+  cleanupLocalState(storageKey);
 }
 
 async function loadState() {
