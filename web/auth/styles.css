@@ -134,7 +134,7 @@ body {
   border: 1px solid rgba(67, 77, 110, 0.18);
   border-radius: 12px;
   padding: 14px 16px;
-  font-size: 15px;
+  font-size: 16px;
   background: rgba(255, 255, 255, 0.92);
   transition: border 0.2s ease, box-shadow 0.2s ease;
   width: 100%;
@@ -166,7 +166,7 @@ body {
   border: none;
   border-radius: 12px;
   padding: 14px 16px;
-  font-size: 15px;
+  font-size: 16px;
   background: transparent;
   flex: 1;
   width: 100%;
