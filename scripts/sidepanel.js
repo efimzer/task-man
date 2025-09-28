@@ -5,6 +5,7 @@ import { authStore } from './auth.js';
 const STORAGE_KEY = 'vuexyTodoState';
 const ALL_FOLDER_ID = 'all';
 const ARCHIVE_FOLDER_ID = 'archive';
+const EMPTY_STATE_TIMEOUT = 30 * 1000;
 
 const hasChromeStorage = typeof chrome !== 'undefined' && chrome.storage?.local;
 let syncManager = null;
@@ -12,6 +13,27 @@ let storageKey = STORAGE_KEY;
 let authMode = 'login'; // Переместили сюда
 let pendingAuthErrorMessage = '';
 let pendingAuthPrefillEmail = '';
+let currentScreen = null;
+let draggingTaskId = null;
+let editingFolderId = null;
+let folderMenuAnchor = null;
+let inlineComposer = null;
+let lastCreatedTaskId = null;
+let initialSyncCompleted = false;
+let syncBootstrapInFlight = false;
+let emptyStateTimer = null;
+let emptyStateTimerFolderId = null;
+let emptyStateExpired = false;
+
+const folderMenuState = {
+  visible: false,
+  folderId: null
+};
+
+const appMenuState = {
+  visible: false,
+  anchor: null
+};
 
 const shouldUseAuthCookies = (() => {
   if (typeof window === 'undefined' || !syncConfig.baseUrl) {
@@ -353,6 +375,12 @@ console.log('🔑 Auth store initialized, user:', initialAuthUser, 'token:', aut
 await bootstrapAuthContext(initialAuthUser?.email);
 
 let state = await loadState();
+console.log('📋 Loaded state:', {
+  folders: state.folders?.length,
+  tasks: state.tasks?.length,
+  archivedTasks: state.archivedTasks?.length,
+  selectedFolderId: state.ui?.selectedFolderId
+});
 
 normalizeLoadedState();
 
@@ -384,30 +412,6 @@ if (authStore.getToken()) {
   console.log('❌ User not authenticated, showing auth overlay');
   showAuthOverlay();
 }
-
-let currentScreen = null;
-let draggingTaskId = null;
-let editingFolderId = null;
-let folderMenuAnchor = null;
-let inlineComposer = null;
-let lastCreatedTaskId = null;
-let initialSyncCompleted = false;
-let syncBootstrapInFlight = false;
-
-const folderMenuState = {
-  visible: false,
-  folderId: null
-};
-
-const appMenuState = {
-  visible: false,
-  anchor: null
-};
-
-let emptyStateTimer = null;
-let emptyStateTimerFolderId = null;
-let emptyStateExpired = false;
-const EMPTY_STATE_TIMEOUT = 30 * 1000;
 
 elements.folderModalForm.addEventListener('submit', handleFolderModalSubmit);
 elements.folderModalCancel.addEventListener('click', closeFolderModal);
