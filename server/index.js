@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import bcrypt from 'bcryptjs';
 import { join, dirname } from 'node:path';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -13,7 +12,8 @@ const SESSION_COOKIE = process.env.TODO_SESSION_COOKIE || 'todo_session';
 const SESSION_TTL = Number(process.env.TODO_SESSION_TTL || 1000 * 60 * 60 * 24 * 30);
 
 const PRIMARY_USER_EMAIL = 'efimzer@gmail.com';
-const PASSWORD_HASH = await bcrypt.hash('efimzer008', 10);
+const PRIMARY_PASSWORD = 'efimzer008';
+const BASIC_TOKEN = Buffer.from(`${PRIMARY_USER_EMAIL}:${PRIMARY_PASSWORD}`).toString('base64');
 
 mkdirSync(dirname(DATA_FILE), { recursive: true });
 
@@ -49,6 +49,35 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 
+app.use((req, res, next) => {
+  if (authorized(req)) {
+    res.cookie(SESSION_COOKIE, PRIMARY_USER_EMAIL, {
+      httpOnly: true,
+      sameSite: 'none',
+      secure: true,
+      maxAge: SESSION_TTL
+    });
+    return next();
+  }
+
+  if (hasBasicHeader(req)) {
+    res.cookie(SESSION_COOKIE, PRIMARY_USER_EMAIL, {
+      httpOnly: true,
+      sameSite: 'none',
+      secure: true,
+      maxAge: SESSION_TTL
+    });
+    req.cookies[SESSION_COOKIE] = PRIMARY_USER_EMAIL;
+    return next();
+  }
+
+  if (req.path === '/api/auth/login' || req.path === '/api/auth/me') {
+    return next();
+  }
+
+  next();
+});
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 app.use('/web', express.static(join(rootDir, 'web')));
@@ -57,9 +86,18 @@ app.use('/styles', express.static(join(rootDir, 'styles')));
 app.use('/icons', express.static(join(rootDir, 'icons')));
 app.get('/', (req, res) => res.redirect('/web/'));
 
+function hasBasicHeader(req) {
+  const header = req.get('authorization') || '';
+  const [scheme, encoded] = header.split(' ');
+  return scheme === 'Basic' && encoded === BASIC_TOKEN;
+}
+
 function authorized(req) {
   const cookie = req.cookies?.[SESSION_COOKIE];
-  return cookie === PRIMARY_USER_EMAIL;
+  if (cookie === PRIMARY_USER_EMAIL) {
+    return true;
+  }
+  return hasBasicHeader(req);
 }
 
 app.post('/api/auth/login', async (req, res) => {
@@ -68,14 +106,14 @@ app.post('/api/auth/login', async (req, res) => {
     res.status(403).json({ error: 'FORBIDDEN' });
     return;
   }
-  const valid = await bcrypt.compare(password ?? '', PASSWORD_HASH);
-  if (!valid) {
+  if (password !== PRIMARY_PASSWORD) {
     res.status(401).json({ error: 'INVALID_CREDENTIALS' });
     return;
   }
   res.cookie(SESSION_COOKIE, PRIMARY_USER_EMAIL, {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: 'none',
+    secure: true,
     maxAge: SESSION_TTL
   });
   res.json({ ok: true, user: { email: PRIMARY_USER_EMAIL } });
