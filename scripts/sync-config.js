@@ -5,10 +5,6 @@ export const syncConfig = {
   authToken: '',
   authTokenInQuery: false,
   useSessionAuth: false,
-  basicAuth: {
-    username: 'efimzer',
-    password: 'GJ8181!'
-  },
   pullOnStartup: true,
   pushDebounceMs: 500,
   pullIntervalMs: 2500

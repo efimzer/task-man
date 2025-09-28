@@ -1,153 +1,118 @@
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import bcrypt from 'bcryptjs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
-import { Low } from 'lowdb';
-import { JSONFile } from 'lowdb/node';
+import { fileURLToPath } from 'node:url';
 
 const PORT = process.env.PORT || 8787;
 const DATA_FILE = process.env.TODO_SYNC_DB || join(process.cwd(), 'server', 'storage.json');
+const SESSION_COOKIE = process.env.TODO_SESSION_COOKIE || 'todo_session';
+const SESSION_TTL = Number(process.env.TODO_SESSION_TTL || 1000 * 60 * 60 * 24 * 30);
+
+const PRIMARY_USER_EMAIL = 'efimzer@gmail.com';
+const PASSWORD_HASH = await bcrypt.hash('efimzer008', 10);
+
 mkdirSync(dirname(DATA_FILE), { recursive: true });
 
-const BASIC_AUTH_USERNAME = process.env.BASIC_AUTH_USERNAME || '';
-const BASIC_AUTH_PASSWORD = process.env.BASIC_AUTH_PASSWORD || '';
-const SESSION_COOKIE = process.env.BASIC_SESSION_COOKIE || 'todo_basic_session';
-const SESSION_TTL = Number(process.env.BASIC_SESSION_TTL || 1000 * 60 * 60 * 24 * 7);
+let state = {
+  meta: { version: 0, updatedAt: Date.now() },
+  folders: [
+    { id: 'all', name: 'Все' },
+    { id: 'inbox', name: 'Основные' },
+    { id: 'personal', name: 'Личное' },
+    { id: 'archive', name: 'Архив' }
+  ],
+  tasks: [],
+  archivedTasks: [],
+  ui: { selectedFolderId: 'inbox', activeScreen: 'folders' }
+};
 
-const normalizeKey = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
-
-const DEFAULT_STATE_KEY = normalizeKey(process.env.TODO_STATE_KEY) || 'owner';
-const DEFAULT_ALIASES = ['efimzer@gmail.com', 'shared'].map(normalizeKey).filter(Boolean);
-const EXTRA_ALIASES = (process.env.TODO_STATE_ALIASES || '')
-  .split(',')
-  .map(normalizeKey)
-  .filter(Boolean);
-const STATE_ALIASES = Array.from(new Set([DEFAULT_STATE_KEY, ...DEFAULT_ALIASES, ...EXTRA_ALIASES]));
-
-const db = new Low(new JSONFile(DATA_FILE), { states: {} });
-await db.read();
-if (!db.data) {
-  db.data = { states: {} };
+try {
+  const existing = await import(`file://${DATA_FILE}`, { assert: { type: 'json' } });
+  if (existing?.default?.state) {
+    state = existing.default.state;
+  }
+} catch (error) {
+  state.meta.updatedAt = Date.now();
 }
-if (!db.data.states) {
-  db.data.states = {};
+
+async function persist() {
+  await Bun.write(DATA_FILE, JSON.stringify({ state }, null, 2));
 }
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
-
-const expectedToken = BASIC_AUTH_USERNAME
-  ? Buffer.from(`${BASIC_AUTH_USERNAME}:${BASIC_AUTH_PASSWORD}`).toString('base64')
-  : '';
-
-function authorize(req, res, next) {
-  if (!BASIC_AUTH_USERNAME) {
-    req.authUser = null;
-    return next();
-  }
-
-  const cookieToken = req.cookies?.[SESSION_COOKIE];
-  if (cookieToken && cookieToken === expectedToken) {
-    req.authUser = normalizeKey(BASIC_AUTH_USERNAME);
-    return next();
-  }
-
-  const header = req.get('authorization') || '';
-  const [scheme, encoded] = header.split(' ');
-  if (scheme === 'Basic' && encoded === expectedToken) {
-    res.cookie(SESSION_COOKIE, expectedToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      maxAge: SESSION_TTL
-    });
-    req.authUser = normalizeKey(BASIC_AUTH_USERNAME);
-    return next();
-  }
-
-  res.set('WWW-Authenticate', 'Basic realm="To Do"');
-  res.status(401).send('Authentication required');
-}
+app.use(express.json({ limit: '1mb' }));
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
-const webDir = join(rootDir, 'web');
-const scriptsDir = join(rootDir, 'scripts');
-const stylesDir = join(rootDir, 'styles');
-const iconsDir = join(rootDir, 'icons');
-const authDir = join(webDir, 'auth');
+app.use('/web', express.static(join(rootDir, 'web')));
+app.use('/scripts', express.static(join(rootDir, 'scripts')));
+app.use('/styles', express.static(join(rootDir, 'styles')));
+app.use('/icons', express.static(join(rootDir, 'icons')));
+app.get('/', (req, res) => res.redirect('/web/'));
 
-app.use(authorize);
-app.use('/web', express.static(webDir));
-app.use('/scripts', express.static(scriptsDir));
-app.use('/styles', express.static(stylesDir));
-app.use('/icons', express.static(iconsDir));
-app.use('/auth', express.static(authDir));
-
-app.get('/', (req, res) => {
-  res.redirect('/web/');
-});
-
-function resolveStateKey(req, paramUserId) {
-  const fromAuth = normalizeKey(req.authUser);
-  if (fromAuth) {
-    return fromAuth;
-  }
-  const fromParam = normalizeKey(paramUserId);
-  if (fromParam) {
-    return fromParam;
-  }
-  return DEFAULT_STATE_KEY;
+function authorized(req) {
+  const cookie = req.cookies?.[SESSION_COOKIE];
+  return cookie === PRIMARY_USER_EMAIL;
 }
 
-function ensurePersistedState(key, state) {
-  const payload = JSON.parse(JSON.stringify(state));
-  const targets = new Set([key, DEFAULT_STATE_KEY, ...STATE_ALIASES]);
-  targets.forEach((alias) => {
-    if (alias) {
-      db.data.states[alias] = payload;
-    }
-  });
-}
-
-app.get('/state/:userId', async (req, res) => {
-  const key = resolveStateKey(req, req.params.userId);
-  let record = db.data.states[key];
-  if (!record) {
-    for (const alias of STATE_ALIASES) {
-      if (db.data.states[alias]) {
-        record = db.data.states[alias];
-        ensurePersistedState(key, record);
-        await db.write();
-        break;
-      }
-    }
-  }
-
-  if (!record) {
-    res.status(404).json({ error: 'STATE_NOT_FOUND' });
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body ?? {};
+  if (email !== PRIMARY_USER_EMAIL) {
+    res.status(403).json({ error: 'FORBIDDEN' });
     return;
   }
-
-  res.json(record);
+  const valid = await bcrypt.compare(password ?? '', PASSWORD_HASH);
+  if (!valid) {
+    res.status(401).json({ error: 'INVALID_CREDENTIALS' });
+    return;
+  }
+  res.cookie(SESSION_COOKIE, PRIMARY_USER_EMAIL, {
+    httpOnly: true,
+    sameSite: 'lax',
+    maxAge: SESSION_TTL
+  });
+  res.json({ ok: true, user: { email: PRIMARY_USER_EMAIL } });
 });
 
-app.put('/state/:userId', async (req, res) => {
-  const key = resolveStateKey(req, req.params.userId);
-  const payload = req.body?.state;
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie(SESSION_COOKIE);
+  res.json({ ok: true });
+});
 
+app.get('/api/auth/me', (req, res) => {
+  if (authorized(req)) {
+    res.json({ authenticated: true, user: { email: PRIMARY_USER_EMAIL } });
+    return;
+  }
+  res.json({ authenticated: false });
+});
+
+app.get('/state/:userId?', (req, res) => {
+  if (!authorized(req)) {
+    res.status(401).json({ error: 'UNAUTHORIZED' });
+    return;
+  }
+  res.json(state);
+});
+
+app.put('/state/:userId?', async (req, res) => {
+  if (!authorized(req)) {
+    res.status(401).json({ error: 'UNAUTHORIZED' });
+    return;
+  }
+  const payload = req.body?.state;
   if (!payload || typeof payload !== 'object') {
     res.status(400).json({ error: 'INVALID_STATE' });
     return;
   }
-
-  ensurePersistedState(key, payload);
-  await db.write();
-
-  res.json({ ok: true, meta: db.data.states[key]?.meta ?? null });
+  state = payload;
+  await persist();
+  res.json({ ok: true, meta: state.meta ?? null });
 });
 
 app.listen(PORT, () => {
