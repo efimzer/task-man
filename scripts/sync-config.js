@@ -4,7 +4,7 @@ export const syncConfig = {
   userId: 'shared',
   authToken: '',
   authTokenInQuery: false,
-  useSessionAuth: false,
+  useSessionAuth: true,
   pullOnStartup: true,
   pushDebounceMs: 500,
   pullIntervalMs: 2500
