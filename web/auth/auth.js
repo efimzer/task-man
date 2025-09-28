@@ -90,7 +90,8 @@ async function request(url, body) {
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    credentials: 'include'
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -141,13 +142,12 @@ async function handleSubmit(event) {
 }
 
 async function checkSession() {
-  const token = getStoredToken();
-  if (!token) {
-    return false;
-  }
   try {
+    const token = getStoredToken();
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
     const response = await fetch('/api/auth/me', {
-      headers: { Authorization: `Bearer ${token}` }
+      headers,
+      credentials: 'include'
     });
     const data = await response.json().catch(() => ({}));
     if (data?.authenticated) {
