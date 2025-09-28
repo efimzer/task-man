@@ -5,6 +5,10 @@ export const syncConfig = {
   authToken: '',
   authTokenInQuery: false,
   useSessionAuth: true,
+  sessionCredentials: {
+    email: 'efimzer@gmail.com',
+    password: 'efimzer008'
+  },
   pullOnStartup: true,
   pushDebounceMs: 500,
   pullIntervalMs: 2500
