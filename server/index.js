@@ -75,6 +75,11 @@ app.use((req, res, next) => {
     return next();
   }
 
+  if (req.path.startsWith('/web') || req.path === '/') {
+    res.redirect('/auth/');
+    return;
+  }
+
   next();
 });
 
@@ -84,6 +89,9 @@ app.use('/web', express.static(join(rootDir, 'web')));
 app.use('/scripts', express.static(join(rootDir, 'scripts')));
 app.use('/styles', express.static(join(rootDir, 'styles')));
 app.use('/icons', express.static(join(rootDir, 'icons')));
+app.use('/auth', (req, res) => {
+  res.status(401).send('Authentication required');
+});
 app.get('/', (req, res) => res.redirect('/web/'));
 
 function hasBasicHeader(req) {
