@@ -54,8 +54,8 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   }
 
   const headers = { 'Content-Type': 'application/json' };
-  if (syncConfig.sessionCredentials?.email) {
-    const raw = `${syncConfig.sessionCredentials.email}:${syncConfig.sessionCredentials.password ?? ''}`;
+  if (syncConfig.basicAuth?.username) {
+    const raw = `${syncConfig.basicAuth.username}:${syncConfig.basicAuth.password ?? ''}`;
     headers.Authorization = `Basic ${btoa(raw)}`;
   } else if (syncConfig.authToken) {
     headers.Authorization = `Bearer ${syncConfig.authToken}`;
@@ -92,68 +92,8 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   let lastSyncedVersion = null;
   let lastError = null;
   let pollTimer = null;
-  let loginPromise = null;
-  let isAuthenticated = false;
-
-  async function ensureAuthenticated() {
-    if (!includeCredentials) {
-      return;
-    }
-    if (!syncConfig.sessionCredentials?.email || !syncConfig.sessionCredentials?.password) {
-      return;
-    }
-    if (isAuthenticated) {
-      return;
-    }
-    if (loginPromise) {
-      return loginPromise;
-    }
-
-    const payload = {
-      email: syncConfig.sessionCredentials.email,
-      password: syncConfig.sessionCredentials.password
-    };
-
-    loginPromise = fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(payload)
-    })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Auth failed (${response.status})`);
-        }
-        isAuthenticated = true;
-      })
-      .catch((error) => {
-        console.warn('Todo sync: auth error', error);
-        throw error;
-      })
-      .finally(() => {
-        loginPromise = null;
-      });
-
-    return loginPromise;
-  }
-
-  async function fetchWithAuth(input, init = {}, { retryOnUnauthorized = true } = {}) {
-    if (includeCredentials) {
-      await ensureAuthenticated();
-    }
-
-    const response = await fetch(input, {
-      ...init,
-      credentials: includeCredentials ? 'include' : init.credentials
-    });
-
-    if (response.status === 401 && retryOnUnauthorized && includeCredentials) {
-      isAuthenticated = false;
-      await ensureAuthenticated();
-      return fetchWithAuth(input, init, { retryOnUnauthorized: false });
-    }
-
-    return response;
+  async function fetchWithAuth(input, init = {}) {
+    return fetch(input, init);
   }
 
   function setStatus(status) {

@@ -7,9 +7,11 @@ import { fileURLToPath } from 'node:url';
 
 const PORT = process.env.PORT || 8787;
 const DATA_FILE = process.env.TODO_SYNC_DB || join(process.cwd(), 'server', 'storage.json');
-const API_TOKEN = process.env.API_TOKEN || '1d746f74c8be4e78adf1f6b6b2ce4f3c';
-
 mkdirSync(dirname(DATA_FILE), { recursive: true });
+
+const PRIMARY_USER_EMAIL = 'efimzer@gmail.com';
+const PRIMARY_PASSWORD = 'efimzer008';
+const BASIC_TOKEN = Buffer.from(`${PRIMARY_USER_EMAIL}:${PRIMARY_PASSWORD}`).toString('base64');
 
 let state = {
   meta: { version: 0, updatedAt: Date.now() },
@@ -51,38 +53,26 @@ app.use('/icons', express.static(join(rootDir, 'icons')));
 app.get('/', (req, res) => res.redirect('/web/'));
 
 function authorized(req) {
-  if (!API_TOKEN) {
-    return true;
-  }
-
   const header = req.get('authorization') || '';
   const [scheme, encoded] = header.split(' ');
-  if (scheme === 'Bearer' && encoded === API_TOKEN) {
-    return true;
-  }
-
-  const token = req.query.token || req.get('x-api-token');
-  if (typeof token === 'string' && token === API_TOKEN) {
-    return true;
-  }
-
-  return false;
+  return scheme === 'Basic' && encoded === BASIC_TOKEN;
 }
 
-app.get('/state/:userId?', (req, res) => {
-  if (!authorized(req)) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return;
+app.use((req, res, next) => {
+  if (authorized(req)) {
+    res.set('Cache-Control', 'no-store');
+    return next();
   }
+
+  res.set('WWW-Authenticate', 'Basic realm="Todo"');
+  res.status(401).send('Authentication required');
+});
+
+app.get('/state/:userId?', (req, res) => {
   res.json(state);
 });
 
 app.put('/state/:userId?', async (req, res) => {
-  if (!authorized(req)) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return;
-  }
-
   const payload = req.body?.state;
   if (!payload || typeof payload !== 'object') {
     res.status(400).json({ error: 'INVALID_STATE' });
