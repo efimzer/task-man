@@ -15,7 +15,21 @@ function cloneState(state) {
   return JSON.parse(JSON.stringify(state));
 }
 
-export function createSyncManager({ getState, applyRemoteState, onStatusChange } = {}) {
+function buildHeaders({ token } = {}) {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  return headers;
+}
+
+export function createSyncManager({
+  getState,
+  applyRemoteState,
+  onStatusChange,
+  getAuthToken,
+  onUnauthorized
+} = {}) {
   const enabled = Boolean(syncConfig?.enabled && syncConfig.baseUrl && typeof getState === 'function');
 
   if (!enabled) {
@@ -40,39 +54,10 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   }
 
   const baseUrl = normalizeBaseUrl(syncConfig.baseUrl);
+  const stateEndpoint = `${baseUrl}/state`;
+
   const parsedDebounce = Number(syncConfig.pushDebounceMs);
   const debounceMs = Number.isFinite(parsedDebounce) ? Math.max(50, parsedDebounce) : DEFAULT_DEBOUNCE;
-
-  let includeCredentials = Boolean(syncConfig.useSessionAuth);
-  if (!includeCredentials && typeof window !== 'undefined' && baseUrl) {
-    try {
-      const target = new URL(baseUrl, window.location.origin);
-      includeCredentials = target.origin === window.location.origin;
-    } catch (error) {
-      includeCredentials = false;
-    }
-  }
-
-  const headers = { 'Content-Type': 'application/json' };
-  if (syncConfig.basicAuth?.username) {
-    const raw = `${syncConfig.basicAuth.username}:${syncConfig.basicAuth.password ?? ''}`;
-    headers.Authorization = `Basic ${btoa(raw)}`;
-  } else if (syncConfig.authToken) {
-    headers.Authorization = `Bearer ${syncConfig.authToken}`;
-  }
-
-  const tokenQuery = syncConfig.authToken && syncConfig.authTokenInQuery
-    ? `token=${encodeURIComponent(syncConfig.authToken)}`
-    : '';
-
-  const stateUrl = () => {
-    const effectiveUserId = syncConfig.userId || 'shared';
-    const path = `${baseUrl}/state/${encodeURIComponent(effectiveUserId)}`;
-    if (!tokenQuery) {
-      return path;
-    }
-    return path.includes('?') ? `${path}&${tokenQuery}` : `${path}?${tokenQuery}`;
-  };
 
   let pollInterval = null;
   if (syncConfig?.pullIntervalMs === undefined || syncConfig?.pullIntervalMs === null) {
@@ -87,14 +72,11 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   }
 
   let pushTimer = null;
+  let pollTimer = null;
   let isPushing = false;
   let isPulling = false;
   let lastSyncedVersion = null;
   let lastError = null;
-  let pollTimer = null;
-  async function fetchWithAuth(input, init = {}) {
-    return fetch(input, init);
-  }
 
   function setStatus(status) {
     lastError = status?.error ?? null;
@@ -109,6 +91,29 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     }
   }
 
+  function handleUnauthorized() {
+    if (typeof onUnauthorized === 'function') {
+      onUnauthorized();
+    }
+  }
+
+  async function authorizedFetch(url, init = {}) {
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : undefined;
+    const headers = buildHeaders({ token });
+    if (init.headers) {
+      const custom = new Headers(init.headers);
+      custom.forEach((value, key) => headers.set(key, value));
+    }
+    const response = await fetch(url, {
+      ...init,
+      headers
+    });
+    if (response.status === 401) {
+      handleUnauthorized();
+    }
+    return response;
+  }
+
   async function pullLatest({ skipIfUnchanged = false } = {}) {
     if (isPulling || isPushing) {
       return { applied: false, notFound: false, skipped: true };
@@ -117,7 +122,7 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     setStatus({});
 
     try {
-      const response = await fetchWithAuth(stateUrl(), { headers });
+      const response = await authorizedFetch(stateEndpoint);
 
       if (response.status === 404) {
         const current = typeof getState === 'function' ? getState() : null;
@@ -192,9 +197,8 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     setStatus({});
 
     try {
-      const response = await fetchWithAuth(stateUrl(), {
+      const response = await authorizedFetch(stateEndpoint, {
         method: 'PUT',
-        headers,
         body: JSON.stringify({ state: payload })
       });
 

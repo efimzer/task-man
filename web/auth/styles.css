@@ -315,6 +315,14 @@ body {
   display: none !important;
 }
 
+.auth-switch-mode {
+  border: none;
+  background: none;
+  margin-top: 12px;
+  padding: 0;
+  align-self: center;
+}
+
 @supports (-webkit-touch-callout: none) {
   input,
   textarea,

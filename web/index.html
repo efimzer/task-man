@@ -95,6 +95,27 @@
 
     <button id="floatingActionButton" class="fab" type="button" aria-label="Добавить">＋</button>
 
+    <div id="authOverlay" class="auth-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+      <div class="auth-card">
+        <h2 id="authTitle" class="auth-heading">Вход</h2>
+        <form id="authForm" class="auth-form" autocomplete="off">
+          <label class="field">
+            <span class="field-label">Email</span>
+            <input id="authEmail" type="email" class="input" autocomplete="email" required />
+          </label>
+          <label class="field">
+            <span class="field-label">Пароль</span>
+            <input id="authPassword" type="password" class="input" autocomplete="current-password" required minlength="6" />
+          </label>
+          <p id="authError" class="auth-inline-error" role="alert"></p>
+          <div class="auth-actions">
+            <button id="authSubmit" type="submit" class="primary-button">Войти</button>
+            <button id="authToggleMode" type="button" class="ghost-button">Регистрация</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script type="module" src="../scripts/sidepanel.js"></script>
     <script>
       if ('serviceWorker' in navigator) {

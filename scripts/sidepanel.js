@@ -1,5 +1,6 @@
 import { createSyncManager } from './sync.js';
 import { syncConfig } from './sync-config.js';
+import { authStore } from './auth.js';
 
 const STORAGE_KEY = 'vuexyTodoState';
 const ALL_FOLDER_ID = 'all';
@@ -97,8 +98,8 @@ function cleanupLocalState(activeKey) {
   }
 }
 
-async function bootstrapAuthContext() {
-  const userKey = normalizeUserKey(syncConfig.userId);
+async function bootstrapAuthContext(userIdentifier) {
+  const userKey = normalizeUserKey(userIdentifier);
   storageKey = userKey ? `${STORAGE_KEY}:${userKey}` : STORAGE_KEY;
   cleanupLocalState(storageKey);
 }
@@ -233,6 +234,15 @@ function ensureAllFolder(state) {
   }
 }
 
+function normalizeLoadedState() {
+  ensureAllFolder(state);
+  state.tasks = state.tasks.map((task, index) => ({
+    ...task,
+    order: typeof task.order === 'number' ? task.order : index
+  }));
+  state.meta = state.meta ?? { version: 0, updatedAt: Date.now() };
+}
+
 function applyRemoteState(remoteState) {
   if (!remoteState) {
     return;
@@ -265,15 +275,32 @@ function applyRemoteState(remoteState) {
   render();
 }
 
-await bootstrapAuthContext();
+await authStore.init();
+const initialAuthUser = authStore.getUser();
 
-const state = await loadState();
-ensureAllFolder(state);
-state.tasks = state.tasks.map((task, index) => ({
-  ...task,
-  order: typeof task.order === 'number' ? task.order : index
-}));
-state.meta = state.meta ?? { version: 0, updatedAt: Date.now() };
+await bootstrapAuthContext(initialAuthUser?.email);
+
+let state = await loadState();
+
+authStore.subscribe(({ token, user }) => {
+  if (!token) {
+    stopSyncManager();
+    initialSyncCompleted = false;
+    const email = pendingAuthPrefillEmail || user?.email || elements.authEmail?.value || '';
+    showAuthOverlay({ errorMessage: pendingAuthErrorMessage, prefillEmail: email });
+    pendingAuthErrorMessage = '';
+    pendingAuthPrefillEmail = '';
+  } else if (elements.authOverlay && !elements.authOverlay.classList.contains('hidden')) {
+    hideAuthOverlay();
+  }
+});
+normalizeLoadedState();
+
+if (authStore.getToken()) {
+  await startSyncIfNeeded({ forcePull: true });
+} else {
+  showAuthOverlay();
+}
 
 const elements = {
   screenFolders: document.getElementById('screenFolders'),
@@ -295,7 +322,15 @@ const elements = {
   appMenu: document.getElementById('appMenu'),
   logoutAction: document.getElementById('logoutAction'),
   clearArchiveAction: document.getElementById('clearArchiveAction'),
-  floatingActionButton: document.getElementById('floatingActionButton')
+  floatingActionButton: document.getElementById('floatingActionButton'),
+  authOverlay: document.getElementById('authOverlay'),
+  authForm: document.getElementById('authForm'),
+  authEmail: document.getElementById('authEmail'),
+  authPassword: document.getElementById('authPassword'),
+  authSubmit: document.getElementById('authSubmit'),
+  authToggleMode: document.getElementById('authToggleMode'),
+  authError: document.getElementById('authError'),
+  authTitle: document.getElementById('authTitle')
 };
 
 let currentScreen = null;
@@ -304,6 +339,10 @@ let editingFolderId = null;
 let folderMenuAnchor = null;
 let inlineComposer = null;
 let lastCreatedTaskId = null;
+let authMode = 'login';
+let initialSyncCompleted = false;
+let syncBootstrapInFlight = false;
+let pendingAuthPrefillEmail = '';
 
 const folderMenuState = {
   visible: false,
@@ -323,6 +362,8 @@ const EMPTY_STATE_TIMEOUT = 30 * 1000;
 elements.folderModalForm.addEventListener('submit', handleFolderModalSubmit);
 elements.folderModalCancel.addEventListener('click', closeFolderModal);
 elements.modalBackdrop.addEventListener('click', closeFolderModal);
+elements.authForm?.addEventListener('submit', handleAuthSubmit);
+elements.authToggleMode?.addEventListener('click', toggleAuthMode);
 
 elements.folderList.addEventListener('click', handleFolderClick);
 elements.folderList.addEventListener('keydown', handleFolderKeydown);
@@ -337,6 +378,211 @@ document.addEventListener('scroll', () => {
   closeAppMenu();
 }, true);
 
+function updateAuthMode(mode) {
+  authMode = mode;
+  const isLogin = authMode === 'login';
+  if (elements.authTitle) {
+    elements.authTitle.textContent = isLogin ? 'Вход' : 'Регистрация';
+  }
+  if (elements.authSubmit) {
+    elements.authSubmit.textContent = isLogin ? 'Войти' : 'Создать аккаунт';
+  }
+  if (elements.authToggleMode) {
+    elements.authToggleMode.textContent = isLogin ? 'Регистрация' : 'У меня есть аккаунт';
+  }
+}
+
+function toggleAuthMode(event) {
+  event?.preventDefault();
+  updateAuthMode(authMode === 'login' ? 'register' : 'login');
+  setAuthError('');
+  elements.authPassword?.focus({ preventScroll: true });
+}
+
+function setAuthError(message) {
+  if (elements.authError) {
+    elements.authError.textContent = message ?? '';
+  }
+}
+
+function setAuthLoading(isLoading) {
+  if (elements.authSubmit) {
+    const baseLabel = authMode === 'login' ? 'Войти' : 'Создать аккаунт';
+    elements.authSubmit.disabled = Boolean(isLoading);
+    elements.authSubmit.textContent = isLoading ? `${baseLabel}…` : baseLabel;
+  }
+  elements.authEmail?.setAttribute('aria-busy', String(!!isLoading));
+  elements.authPassword?.setAttribute('aria-busy', String(!!isLoading));
+}
+
+function showAuthOverlay({ errorMessage, prefillEmail } = {}) {
+  if (!elements.authOverlay) {
+    return;
+  }
+  authMode = 'login';
+  elements.authOverlay.classList.remove('hidden');
+  updateAuthMode(authMode);
+  setAuthError(errorMessage ?? '');
+  const email = prefillEmail ?? authStore.getUser()?.email ?? '';
+  if (elements.authEmail) {
+    elements.authEmail.value = email;
+  }
+  if (elements.authPassword) {
+    elements.authPassword.value = '';
+  }
+  requestAnimationFrame(() => {
+    elements.authEmail?.focus({ preventScroll: true });
+  });
+}
+
+function hideAuthOverlay() {
+  if (!elements.authOverlay) {
+    return;
+  }
+  elements.authOverlay.classList.add('hidden');
+  setAuthError('');
+  setAuthLoading(false);
+}
+
+function buildAuthUrl(path) {
+  return buildApiUrl(path.startsWith('/') ? path : `/${path}`);
+}
+
+async function authRequest(path, payload) {
+  const url = buildAuthUrl(path);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const details = data?.details;
+    const detailMessage = typeof details === 'object' ? Object.values(details)[0] : null;
+    const message = data?.error === 'EMAIL_EXISTS'
+      ? 'Такой email уже зарегистрирован'
+      : data?.error === 'INVALID_CREDENTIALS'
+        ? 'Неверный email или пароль'
+        : detailMessage || 'Не удалось выполнить запрос';
+    throw new Error(message);
+  }
+  return data;
+}
+
+async function switchActiveUserSession(user) {
+  const email = user?.email ?? null;
+  await bootstrapAuthContext(email);
+  state = await loadState();
+  normalizeLoadedState();
+  render();
+}
+
+function stopSyncManager() {
+  if (syncManager?.stopPolling) {
+    syncManager.stopPolling();
+  }
+  syncManager = null;
+}
+
+async function startSyncIfNeeded({ forcePull = false } = {}) {
+  if (!authStore.getToken()) {
+    return;
+  }
+  if (!syncManager) {
+    syncManager = createSyncManager({
+      getState: () => state,
+      applyRemoteState,
+      getAuthToken: () => authStore.getToken(),
+      onUnauthorized: handleAuthUnauthorized
+    });
+  }
+  if (!syncManager.enabled) {
+    return;
+  }
+  if (!syncBootstrapInFlight) {
+    syncBootstrapInFlight = true;
+    try {
+      if (!initialSyncCompleted || forcePull) {
+        if (syncConfig.pullOnStartup !== false || forcePull) {
+          await syncManager.pullInitial();
+        }
+        initialSyncCompleted = true;
+      }
+    } catch (error) {
+      console.warn('Todo sync: initial sync failed', error);
+    } finally {
+      syncBootstrapInFlight = false;
+    }
+  }
+  if (typeof syncManager.startPolling === 'function') {
+    syncManager.startPolling();
+  }
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  if (!elements.authEmail || !elements.authPassword) {
+    return;
+  }
+
+  const email = elements.authEmail.value.trim();
+  const password = elements.authPassword.value;
+
+  if (!email || !password) {
+    setAuthError('Введите email и пароль');
+    return;
+  }
+
+  setAuthError('');
+  setAuthLoading(true);
+
+  try {
+    const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+    const result = await authRequest(endpoint, { email, password });
+    await authStore.setSession({ token: result?.token, user: result?.user });
+    await switchActiveUserSession(result?.user);
+    initialSyncCompleted = false;
+    await startSyncIfNeeded({ forcePull: true });
+    hideAuthOverlay();
+  } catch (error) {
+    const friendly = error?.message === 'Failed to fetch'
+      ? 'Не удалось подключиться к серверу'
+      : error?.message;
+    setAuthError(friendly || 'Не удалось выполнить запрос');
+  } finally {
+    setAuthLoading(false);
+  }
+}
+
+async function performLogout() {
+  const token = authStore.getToken();
+  pendingAuthPrefillEmail = authStore.getUser()?.email ?? '';
+  try {
+    if (token) {
+      await fetch(buildAuthUrl('/api/auth/logout'), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+    }
+  } catch (error) {
+    console.warn('Todo sync: logout request failed', error);
+  }
+  await authStore.clearSession();
+  stopSyncManager();
+  initialSyncCompleted = false;
+  await switchActiveUserSession(null);
+}
+
+let pendingAuthErrorMessage = '';
+
+async function handleAuthUnauthorized() {
+  pendingAuthErrorMessage = 'Сессия истекла, войдите снова.';
+  pendingAuthPrefillEmail = authStore.getUser()?.email ?? '';
+  await authStore.clearSession();
+  stopSyncManager();
+  initialSyncCompleted = false;
+  await switchActiveUserSession(null);
+}
 elements.appMenuButtons.forEach((button) => {
   button?.addEventListener('click', handleAppMenuToggle);
 });
@@ -663,27 +909,7 @@ function handleAppMenuDocumentClick(event) {
 async function handleLogoutAction(event) {
   event.preventDefault();
   closeAppMenu();
-
-  let logoutUrl = '/api/auth/logout';
-  let redirectUrl = '/auth/';
-
-  if (syncConfig?.baseUrl) {
-    try {
-      const target = new URL(syncConfig.baseUrl, window.location.origin);
-      logoutUrl = `${target.origin}/api/auth/logout`;
-      redirectUrl = `${target.origin}/auth/`;
-    } catch (error) {
-      console.warn('Todo sync: unable to resolve logout URL from config', error);
-    }
-  }
-
-  try {
-    await fetch(logoutUrl, { method: 'POST', credentials: 'include' });
-  } catch (error) {
-    console.warn('Todo sync: logout failed', error);
-  } finally {
-    window.location.href = redirectUrl;
-  }
+  await performLogout();
 }
 
 function handleClearArchive(event) {

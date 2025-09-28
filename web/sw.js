@@ -7,6 +7,7 @@ const ASSETS = [
   '../styles/theme-dark.css',
   '../styles/app.css',
   '../scripts/sidepanel.js',
+  '../scripts/auth.js',
   '../scripts/sync.js',
   '../scripts/sync-config.js',
   '../icons/favicon_io/favicon-32x32.png',
