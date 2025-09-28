@@ -30,6 +30,7 @@ body {
   justify-content: center;
   padding: clamp(16px, 4vw, 40px);
   color: var(--text-primary);
+  -webkit-text-size-adjust: 100%;
 }
 
 .auth-page {
@@ -312,6 +313,15 @@ body {
 
 .hidden {
   display: none !important;
+}
+
+@supports (-webkit-touch-callout: none) {
+  input,
+  textarea,
+  select,
+  .text-input {
+    font-size: 17px;
+  }
 }
 
 @media (max-width: 860px) {
