@@ -511,7 +511,8 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
       getState: () => state,
       applyRemoteState,
       getAuthToken: () => authStore.getToken(),
-      onUnauthorized: handleAuthUnauthorized
+      onUnauthorized: handleAuthUnauthorized,
+      useAuthCookies: shouldUseAuthCookies
     });
   }
   if (!syncManager.enabled) {
