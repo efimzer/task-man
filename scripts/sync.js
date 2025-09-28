@@ -28,7 +28,8 @@ export function createSyncManager({
   applyRemoteState,
   onStatusChange,
   getAuthToken,
-  onUnauthorized
+  onUnauthorized,
+  useAuthCookies = false
 } = {}) {
   const enabled = Boolean(syncConfig?.enabled && syncConfig.baseUrl && typeof getState === 'function');
 
@@ -106,7 +107,8 @@ export function createSyncManager({
     }
     const response = await fetch(url, {
       ...init,
-      headers
+      headers,
+      credentials: useAuthCookies ? 'include' : 'same-origin'
     });
     if (response.status === 401) {
       handleUnauthorized();
