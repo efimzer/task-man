@@ -54,10 +54,7 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   }
 
   const headers = { 'Content-Type': 'application/json' };
-  if (syncConfig.basicAuth?.username) {
-    const base = `${syncConfig.basicAuth.username}:${syncConfig.basicAuth.password ?? ''}`;
-    headers.Authorization = `Basic ${btoa(base)}`;
-  } else if (syncConfig.authToken) {
+  if (syncConfig.authToken) {
     headers.Authorization = `Bearer ${syncConfig.authToken}`;
   }
 
