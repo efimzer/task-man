@@ -9,6 +9,9 @@ const ARCHIVE_FOLDER_ID = 'archive';
 const hasChromeStorage = typeof chrome !== 'undefined' && chrome.storage?.local;
 let syncManager = null;
 let storageKey = STORAGE_KEY;
+let authMode = 'login'; // Переместили сюда
+let pendingAuthErrorMessage = '';
+let pendingAuthPrefillEmail = '';
 
 const shouldUseAuthCookies = (() => {
   if (typeof window === 'undefined' || !syncConfig.baseUrl) {
@@ -318,8 +321,34 @@ const elements = {
   authTitle: document.getElementById('authTitle')
 };
 
+console.log('🗨️ Elements initialized:', {
+  authOverlay: !!elements.authOverlay,
+  authForm: !!elements.authForm,
+  authEmail: !!elements.authEmail,
+  authPassword: !!elements.authPassword,
+  authSubmit: !!elements.authSubmit
+});
+
+// Проверяем DOM элементы напрямую
+console.log('🔍 Direct DOM check:', {
+  authOverlayById: !!document.getElementById('authOverlay'),
+  authFormById: !!document.getElementById('authForm'),
+  authEmailById: !!document.getElementById('authEmail'),
+  authPasswordById: !!document.getElementById('authPassword'),
+  authSubmitById: !!document.getElementById('authSubmit')
+});
+
+console.log('🌐 Environment info:', {
+  hasChromeStorage,
+  isExtension: typeof chrome !== 'undefined' && chrome.runtime,
+  baseUrl: syncConfig.baseUrl,
+  shouldUseAuthCookies
+});
+
 await authStore.init();
 const initialAuthUser = authStore.getUser();
+
+console.log('🔑 Auth store initialized, user:', initialAuthUser, 'token:', authStore.getToken());
 
 await bootstrapAuthContext(initialAuthUser?.email);
 
@@ -328,7 +357,10 @@ let state = await loadState();
 normalizeLoadedState();
 
 authStore.subscribe(({ token, user }) => {
+  console.log('🔔 Auth store subscription triggered:', { token: !!token, user });
+  
   if (!token) {
+    console.log('🔔 No token - stopping sync and showing auth overlay');
     stopSyncManager();
     initialSyncCompleted = false;
     const email = pendingAuthPrefillEmail || user?.email || elements.authEmail?.value || '';
@@ -336,16 +368,20 @@ authStore.subscribe(({ token, user }) => {
     pendingAuthErrorMessage = '';
     pendingAuthPrefillEmail = '';
   } else if (elements.authOverlay && !elements.authOverlay.classList.contains('hidden')) {
+    console.log('🔔 Token exists and auth overlay visible - hiding overlay and starting sync');
     hideAuthOverlay();
     void startSyncIfNeeded({ forcePull: true });
   } else if (token) {
+    console.log('🔔 Token exists - starting sync');
     void startSyncIfNeeded();
   }
 });
 
 if (authStore.getToken()) {
+  console.log('✅ User is authenticated, starting sync');
   await startSyncIfNeeded({ forcePull: true });
 } else {
+  console.log('❌ User not authenticated, showing auth overlay');
   showAuthOverlay();
 }
 
@@ -355,10 +391,8 @@ let editingFolderId = null;
 let folderMenuAnchor = null;
 let inlineComposer = null;
 let lastCreatedTaskId = null;
-let authMode = 'login';
 let initialSyncCompleted = false;
 let syncBootstrapInFlight = false;
-let pendingAuthPrefillEmail = '';
 
 const folderMenuState = {
   visible: false,
@@ -395,10 +429,15 @@ document.addEventListener('scroll', () => {
 }, true);
 
 function updateAuthMode(mode) {
+  console.log('🔄 updateAuthMode called with:', mode);
   authMode = mode;
   const isLogin = authMode === 'login';
+  
   if (elements.authTitle) {
     elements.authTitle.textContent = isLogin ? 'Вход' : 'Регистрация';
+    console.log('🔄 Set authTitle text');
+  } else {
+    console.log('⚠️ authTitle element not found');
   }
   if (elements.authSubmit) {
     elements.authSubmit.textContent = isLogin ? 'Войти' : 'Создать аккаунт';
@@ -432,24 +471,92 @@ function setAuthLoading(isLoading) {
 }
 
 function showAuthOverlay({ errorMessage, prefillEmail } = {}) {
-  if (!elements.authOverlay) {
-    return;
-  }
-  authMode = 'login';
-  elements.authOverlay.classList.remove('hidden');
-  updateAuthMode(authMode);
+  console.log('🔐 showAuthOverlay called with:', { errorMessage, prefillEmail });
+  console.log('🔐 elements.authOverlay exists:', !!elements.authOverlay);
+  
+  // Временное решение - объявляем authMode локально
+  let localAuthMode = 'login';
+  console.log('🔐 localAuthMode before try block:', typeof localAuthMode, localAuthMode);
+  
+  try {
+    if (!elements.authOverlay) {
+      console.error('❌ authOverlay element not found!');
+      return;
+    }
+    
+    // Дополнительная проверка
+    const authOverlayDirect = document.getElementById('authOverlay');
+    console.log('🔐 Direct DOM query for authOverlay:', !!authOverlayDirect);
+    console.log('🔐 Are they the same element?', elements.authOverlay === authOverlayDirect);
+    
+    localAuthMode = 'login';
+    console.log('🔐 Removing hidden class from authOverlay');
+    elements.authOverlay.classList.remove('hidden');
+    console.log('🔐 AuthOverlay classes after removing hidden:', elements.authOverlay.className);
+    
+    try {
+      console.log('🔐 AuthOverlay computed styles:', {
+        display: getComputedStyle(elements.authOverlay).display,
+        visibility: getComputedStyle(elements.authOverlay).visibility,
+        opacity: getComputedStyle(elements.authOverlay).opacity
+      });
+    } catch (styleError) {
+      console.error('❌ Error getting computed styles:', styleError);
+    }
+  
+  // Принудительно сделаем элемент видимым
+  elements.authOverlay.style.display = 'flex';
+  elements.authOverlay.style.visibility = 'visible';
+  elements.authOverlay.style.opacity = '1';
+  elements.authOverlay.style.pointerEvents = 'auto';
+  elements.authOverlay.style.position = 'fixed';
+    elements.authOverlay.style.top = '0';
+    elements.authOverlay.style.left = '0';
+    elements.authOverlay.style.width = '100%';
+    elements.authOverlay.style.height = '100%';
+    elements.authOverlay.style.zIndex = '9999';
+    elements.authOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+    console.log('🔐 Forced authOverlay to be visible');
+  
+  updateAuthMode(localAuthMode);
+  console.log('🔐 Called updateAuthMode');
+  
   setAuthError(errorMessage ?? '');
+  console.log('🔐 Called setAuthError');
+  
   const email = prefillEmail ?? authStore.getUser()?.email ?? '';
+  console.log('🔐 Prepared email:', email);
+  
   if (elements.authEmail) {
     elements.authEmail.value = email;
+    console.log('🔐 Set authEmail value');
+  } else {
+    console.log('⚠️ authEmail element not found');
   }
   if (elements.authPassword) {
     elements.authPassword.value = '';
     elements.authPassword.type = 'password';
+    console.log('🔐 Set authPassword value');
+  } else {
+    console.log('⚠️ authPassword element not found');
   }
+  
+  console.log('🔐 About to focus authEmail');
   requestAnimationFrame(() => {
+    console.log('🔐 In requestAnimationFrame, focusing authEmail');
     elements.authEmail?.focus({ preventScroll: true });
+    console.log('🔐 Focus completed');
   });
+  
+  console.log('🔐 showAuthOverlay function completed');
+  
+  // Обновляем глобальную переменную
+  authMode = localAuthMode;
+  
+  } catch (error) {
+    console.error('❌ Error in showAuthOverlay:', error);
+    console.error('❌ Error stack:', error.stack);
+  }
 }
 
 function hideAuthOverlay() {
@@ -503,10 +610,14 @@ function stopSyncManager() {
 }
 
 async function startSyncIfNeeded({ forcePull = false } = {}) {
+  console.log('🔄 startSyncIfNeeded called, token:', authStore.getToken(), 'forcePull:', forcePull);
+  
   if (!authStore.getToken()) {
+    console.log('⚠️ No auth token, skipping sync');
     return;
   }
   if (!syncManager) {
+    console.log('🔧 Creating sync manager');
     syncManager = createSyncManager({
       getState: () => state,
       applyRemoteState,
@@ -514,8 +625,10 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
       onUnauthorized: handleAuthUnauthorized,
       useAuthCookies: shouldUseAuthCookies
     });
+    console.log('🔧 Sync manager created, enabled:', syncManager.enabled);
   }
   if (!syncManager.enabled) {
+    console.log('⚠️ Sync manager is disabled');
     return;
   }
   if (!syncBootstrapInFlight) {
@@ -550,13 +663,18 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
 }
 
 async function handleAuthSubmit(event) {
+  console.log('📝 handleAuthSubmit called, event:', event);
   event.preventDefault();
+  
   if (!elements.authEmail || !elements.authPassword) {
+    console.error('❌ Auth form elements not found');
     return;
   }
 
   const email = elements.authEmail.value.trim();
   const password = elements.authPassword.value;
+  
+  console.log('📝 Form values - email:', email, 'password length:', password.length);
 
   if (!email || !password) {
     setAuthError('Введите email и пароль');
@@ -603,8 +721,6 @@ async function performLogout() {
   initialSyncCompleted = false;
   await switchActiveUserSession(null);
 }
-
-let pendingAuthErrorMessage = '';
 
 async function handleAuthUnauthorized() {
   pendingAuthErrorMessage = 'Сессия истекла, войдите снова.';

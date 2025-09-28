@@ -88,14 +88,18 @@ function removeChromeStorage(keys) {
 }
 
 async function loadFromStorage() {
+  console.log('📋 AuthStore: loadFromStorage() called, isChromeExtension:', isChromeExtension);
+  
   if (isChromeExtension) {
     const items = await readChromeStorage([STORAGE_TOKEN_KEY, STORAGE_USER_KEY]);
+    console.log('📋 AuthStore: chrome storage items:', items);
     currentToken = items[STORAGE_TOKEN_KEY] ?? null;
     currentUser = normalizeUser(items[STORAGE_USER_KEY]);
     return;
   }
   currentToken = readLocalStorage(STORAGE_TOKEN_KEY);
   const rawUser = readLocalStorage(STORAGE_USER_KEY);
+  console.log('📋 AuthStore: localStorage data - token:', !!currentToken, 'rawUser:', rawUser);
   currentUser = rawUser ? normalizeUser(JSON.parse(rawUser)) : null;
 }
 
@@ -125,7 +129,9 @@ async function persistToStorage() {
 
 export const authStore = {
   async init() {
+    console.log('🔑 AuthStore: init() called');
     await loadFromStorage();
+    console.log('🔑 AuthStore: loaded from storage, token:', !!currentToken, 'user:', currentUser);
     return { token: currentToken, user: currentUser };
   },
   getToken() {
