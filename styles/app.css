@@ -17,6 +17,10 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .app-shell {
   width: min(760px, 100%);
   display: flex;
@@ -759,6 +763,60 @@ body {
 .ghost-button:hover {
   background: var(--accent-neutral);
   color: var(--text-primary);
+}
+
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  background: rgba(24, 30, 46, 0.65);
+  backdrop-filter: blur(10px);
+  z-index: 2000;
+}
+
+.auth-card {
+  width: min(360px, 100%);
+  background: var(--glass-surface-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  box-shadow: var(--shadow-strong);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.auth-heading {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.auth-inline-error {
+  min-height: 18px;
+  color: #ff4d4f;
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+
+.auth-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.auth-card .primary-button {
+  flex: 1;
+}
+
+.auth-card .ghost-button {
+  white-space: nowrap;
 }
 
 .input-invalid,
