@@ -36,7 +36,8 @@ function buildApiUrl(path) {
 const defaultState = () => ({
   meta: {
     version: 0,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    emptyStateTimestamps: {}
   },
   folders: [
     { id: ALL_FOLDER_ID, name: 'Все' },
@@ -145,6 +146,10 @@ function normalizeState(rawState) {
     }
   };
 
+  if (!Array.isArray(merged.meta)) {
+    merged.meta.emptyStateTimestamps = merged.meta.emptyStateTimestamps ?? {};
+  }
+
   if (merged.ui.activeScreen !== 'tasks' && merged.ui.activeScreen !== 'folders') {
     merged.ui.activeScreen = base.ui.activeScreen;
   }
@@ -170,13 +175,19 @@ async function saveState(state, options = {}) {
   const { skipRemote = false, updateMeta = true } = options;
 
   if (updateMeta) {
-    const nextVersion = Number.isFinite(state.meta?.version) ? state.meta.version + 1 : 1;
+    const prevMeta = state.meta ?? {};
+    const nextVersion = Number.isFinite(prevMeta.version) ? prevMeta.version + 1 : 1;
+    const emptyStateTimestamps = prevMeta.emptyStateTimestamps ?? {};
     state.meta = {
+      ...prevMeta,
       version: nextVersion,
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      emptyStateTimestamps
     };
   } else if (!state.meta) {
-    state.meta = { version: 0, updatedAt: Date.now() };
+    state.meta = { version: 0, updatedAt: Date.now(), emptyStateTimestamps: {} };
+  } else if (!state.meta.emptyStateTimestamps) {
+    state.meta.emptyStateTimestamps = {};
   }
 
   const snapshot = safeClone(state);
@@ -229,6 +240,7 @@ function applyRemoteState(remoteState) {
 
   const normalized = normalizeState(remoteState);
   const preservedUI = { ...state.ui };
+  const preservedEmptyState = { ...(state.meta?.emptyStateTimestamps ?? {}) };
 
   state.folders = normalized.folders;
   state.tasks = normalized.tasks;
@@ -239,7 +251,14 @@ function applyRemoteState(remoteState) {
     selectedFolderId: preservedUI.selectedFolderId ?? normalized.ui?.selectedFolderId,
     activeScreen: preservedUI.activeScreen ?? normalized.ui?.activeScreen
   };
-  state.meta = normalized.meta;
+  const remoteEmptyState = normalized.meta?.emptyStateTimestamps ?? {};
+  const hasRemoteEmptyState = Object.keys(remoteEmptyState).length > 0;
+  state.meta = {
+    ...normalized.meta,
+    emptyStateTimestamps: hasRemoteEmptyState
+      ? { ...remoteEmptyState }
+      : preservedEmptyState
+  };
 
   ensureAllFolder(state);
   saveState(state, { skipRemote: true, updateMeta: false });
@@ -295,6 +314,11 @@ const appMenuState = {
   visible: false,
   anchor: null
 };
+
+let emptyStateTimer = null;
+let emptyStateTimerFolderId = null;
+let emptyStateExpired = false;
+const EMPTY_STATE_TIMEOUT = 30 * 1000;
 
 elements.folderModalForm.addEventListener('submit', handleFolderModalSubmit);
 elements.folderModalCancel.addEventListener('click', closeFolderModal);
@@ -1136,12 +1160,75 @@ function syncTaskOrder() {
   persistState();
 }
 
+function clearEmptyStateTimer() {
+  if (emptyStateTimer) {
+    clearTimeout(emptyStateTimer);
+    emptyStateTimer = null;
+  }
+  emptyStateTimerFolderId = null;
+}
+
+function ensureEmptyStateMeta() {
+  state.meta = state.meta ?? {};
+  state.meta.emptyStateTimestamps = state.meta.emptyStateTimestamps ?? {};
+  return state.meta.emptyStateTimestamps;
+}
+
+function getEmptyStateDeadline(folderId) {
+  if (!folderId) {
+    return null;
+  }
+  return state.meta?.emptyStateTimestamps?.[folderId] ?? null;
+}
+
+function setEmptyStateDeadline(folderId, deadline) {
+  if (!folderId) {
+    return;
+  }
+  const timestamps = ensureEmptyStateMeta();
+  const current = timestamps[folderId] ?? null;
+  if (deadline) {
+    const nextDeadline = Math.trunc(deadline);
+    if (current === nextDeadline) {
+      return;
+    }
+    timestamps[folderId] = nextDeadline;
+  } else {
+    if (!(folderId in timestamps)) {
+      return;
+    }
+    delete timestamps[folderId];
+  }
+  saveState(state, { skipRemote: true, updateMeta: false });
+}
+
+function showDefaultEmptyStateMessage() {
+  const illustration = elements.emptyState.querySelector('.empty-illustration');
+  if (illustration) {
+    illustration.remove();
+  }
+  const message = elements.emptyState.querySelector('.empty-message');
+  if (message) {
+    message.style.display = '';
+    message.textContent = 'Задач пока нет';
+    delete message.dataset.state;
+  }
+}
+
 function handleEmptyState(hasTasks) {
+  const selectedFolderId = state.ui.selectedFolderId;
+
   if (!hasTasks) {
+    if (emptyStateTimer && emptyStateTimerFolderId && emptyStateTimerFolderId !== selectedFolderId) {
+      clearEmptyStateTimer();
+    }
+
     elements.emptyState.classList.add('visible');
 
     const message = elements.emptyState.querySelector('.empty-message');
-    if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+    if (selectedFolderId === ARCHIVE_FOLDER_ID) {
+      clearEmptyStateTimer();
+      emptyStateExpired = false;
       const illustration = elements.emptyState.querySelector('.empty-illustration');
       if (illustration) {
         illustration.remove();
@@ -1151,34 +1238,60 @@ function handleEmptyState(hasTasks) {
         message.style.display = '';
         message.dataset.state = 'archive';
       }
+      setEmptyStateDeadline(selectedFolderId, null);
       return;
     }
 
+    const now = Date.now();
+    const existingDeadline = getEmptyStateDeadline(selectedFolderId);
+    if (existingDeadline === null) {
+      emptyStateExpired = false;
+      setEmptyStateDeadline(selectedFolderId, now + EMPTY_STATE_TIMEOUT);
+    } else {
+      emptyStateExpired = now >= existingDeadline;
+    }
+
     let illustration = elements.emptyState.querySelector('.empty-illustration');
-    if (!illustration) {
+    if (!illustration && !emptyStateExpired) {
       illustration = document.createElement('img');
       illustration.className = 'empty-illustration';
       elements.emptyState.appendChild(illustration);
     }
-    illustration.src = resolveAssetPath('icons/gofima_success.png', { webPath: './gofima_success.png' });
-    illustration.alt = 'Все задачи выполнены';
 
-    if (message) {
-      message.style.display = 'none';
-      message.dataset.state = 'tasks';
+    if (!emptyStateExpired) {
+      if (illustration) {
+        illustration.src = resolveAssetPath('icons/gofima_success.png', { webPath: './gofima_success.png' });
+        illustration.alt = 'Все задачи выполнены';
+        illustration.style.display = '';
+      }
+      if (message) {
+        message.style.display = 'none';
+        message.dataset.state = 'tasks';
+      }
+
+      const deadline = getEmptyStateDeadline(selectedFolderId) ?? now + EMPTY_STATE_TIMEOUT;
+      const timeLeft = Math.max(0, deadline - now);
+      if (!emptyStateTimer && timeLeft > 0) {
+        emptyStateTimerFolderId = selectedFolderId;
+        emptyStateTimer = setTimeout(() => {
+          emptyStateTimer = null;
+          emptyStateTimerFolderId = null;
+          emptyStateExpired = true;
+          showDefaultEmptyStateMessage();
+        }, timeLeft);
+      }
+    } else {
+      showDefaultEmptyStateMessage();
     }
-  } else {
-    elements.emptyState.classList.remove('visible');
-    const illustration = elements.emptyState.querySelector('.empty-illustration');
-    if (illustration) {
-      illustration.remove();
-    }
-    const message = elements.emptyState.querySelector('.empty-message');
-    if (message) {
-      delete message.dataset.state;
-      message.style.display = '';
-      message.textContent = 'Задач пока нет';
-    }
+    return;
+  }
+
+  elements.emptyState.classList.remove('visible');
+  clearEmptyStateTimer();
+  emptyStateExpired = false;
+  showDefaultEmptyStateMessage();
+  if (selectedFolderId) {
+    setEmptyStateDeadline(selectedFolderId, null);
   }
 }
 
@@ -1217,6 +1330,8 @@ function renderFolders() {
 
     if (folder.id === ALL_FOLDER_ID || folder.id === ARCHIVE_FOLDER_ID) {
       menuButton.classList.add('hidden');
+    } else {
+      menuButton.classList.remove('hidden');
     }
 
     if (editingFolderId === folder.id) {
