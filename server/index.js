@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import { join, dirname } from 'node:path';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -41,7 +42,8 @@ async function persist() {
 }
 
 const app = express();
-app.use(cors({ origin: true }));
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -53,6 +55,9 @@ app.use('/icons', express.static(join(rootDir, 'icons')));
 app.get('/', (req, res) => res.redirect('/web/'));
 
 function authorized(req) {
+  if (req.cookies?.todo_session === PRIMARY_USER_EMAIL) {
+    return true;
+  }
   const header = req.get('authorization') || '';
   const [scheme, encoded] = header.split(' ');
   return scheme === 'Basic' && encoded === BASIC_TOKEN;
@@ -61,6 +66,12 @@ function authorized(req) {
 app.use((req, res, next) => {
   if (authorized(req)) {
     res.set('Cache-Control', 'no-store');
+    res.cookie('todo_session', PRIMARY_USER_EMAIL, {
+      httpOnly: true,
+      sameSite: 'none',
+      secure: true,
+      maxAge: 1000 * 60 * 60 * 24 * 30
+    });
     return next();
   }
 
