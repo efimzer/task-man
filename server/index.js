@@ -49,9 +49,11 @@ app.use(express.json({ limit: '1mb' }));
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 
+const authDir = join(rootDir, 'web/auth');
 app.get('/auth', (req, res) => {
-  res.sendFile(join(rootDir, 'web/auth/index.html'));
+  res.sendFile(join(authDir, 'index.html'));
 });
+app.use('/auth', express.static(authDir));
 
 function hasSession(req) {
   return req.cookies?.todo_session === PRIMARY_USER_EMAIL;
@@ -82,9 +84,41 @@ function requireAuth(req, res, next) {
     res.set('Cache-Control', 'no-store');
     return next();
   }
+  if (req.accepts('html')) {
+    res.redirect('/auth');
+    return;
+  }
   res.set('WWW-Authenticate', 'Basic realm="Todo"');
   res.status(401).send('Authentication required');
 }
+
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body ?? {};
+  if (email !== PRIMARY_USER_EMAIL || password !== PRIMARY_PASSWORD) {
+    res.status(401).json({ error: 'INVALID_CREDENTIALS' });
+    return;
+  }
+  establishSession(res);
+  res.json({ ok: true, user: { email: PRIMARY_USER_EMAIL } });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.cookie('todo_session', '', {
+    httpOnly: true,
+    sameSite: 'none',
+    secure: true,
+    expires: new Date(0)
+  });
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  if (hasSession(req) || hasBasic(req)) {
+    res.json({ authenticated: true, user: { email: PRIMARY_USER_EMAIL } });
+    return;
+  }
+  res.json({ authenticated: false });
+});
 
 app.use('/web', requireAuth, express.static(join(rootDir, 'web')));
 app.use('/scripts', requireAuth, express.static(join(rootDir, 'scripts')));
