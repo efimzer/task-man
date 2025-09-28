@@ -48,42 +48,55 @@ app.use(express.json({ limit: '1mb' }));
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
-app.use('/web', express.static(join(rootDir, 'web')));
-app.use('/scripts', express.static(join(rootDir, 'scripts')));
-app.use('/styles', express.static(join(rootDir, 'styles')));
-app.use('/icons', express.static(join(rootDir, 'icons')));
-app.get('/', (req, res) => res.redirect('/web/'));
 
-function authorized(req) {
-  if (req.cookies?.todo_session === PRIMARY_USER_EMAIL) {
-    return true;
-  }
+app.get('/auth', (req, res) => {
+  res.sendFile(join(rootDir, 'web/auth/index.html'));
+});
+
+function hasSession(req) {
+  return req.cookies?.todo_session === PRIMARY_USER_EMAIL;
+}
+
+function hasBasic(req) {
   const header = req.get('authorization') || '';
   const [scheme, encoded] = header.split(' ');
   return scheme === 'Basic' && encoded === BASIC_TOKEN;
 }
 
-app.use((req, res, next) => {
-  if (authorized(req)) {
-    res.set('Cache-Control', 'no-store');
-    res.cookie('todo_session', PRIMARY_USER_EMAIL, {
-      httpOnly: true,
-      sameSite: 'none',
-      secure: true,
-      maxAge: 1000 * 60 * 60 * 24 * 30
-    });
+function establishSession(res) {
+  res.cookie('todo_session', PRIMARY_USER_EMAIL, {
+    httpOnly: true,
+    sameSite: 'none',
+    secure: true,
+    maxAge: 1000 * 60 * 60 * 24 * 30
+  });
+  res.set('Cache-Control', 'no-store');
+}
+
+function requireAuth(req, res, next) {
+  if (hasBasic(req)) {
+    establishSession(res);
     return next();
   }
-
+  if (hasSession(req)) {
+    res.set('Cache-Control', 'no-store');
+    return next();
+  }
   res.set('WWW-Authenticate', 'Basic realm="Todo"');
   res.status(401).send('Authentication required');
-});
+}
 
-app.get('/state/:userId?', (req, res) => {
+app.use('/web', requireAuth, express.static(join(rootDir, 'web')));
+app.use('/scripts', requireAuth, express.static(join(rootDir, 'scripts')));
+app.use('/styles', requireAuth, express.static(join(rootDir, 'styles')));
+app.use('/icons', requireAuth, express.static(join(rootDir, 'icons')));
+app.get('/', requireAuth, (req, res) => res.redirect('/web/'));
+
+app.get('/state/:userId?', requireAuth, (req, res) => {
   res.json(state);
 });
 
-app.put('/state/:userId?', async (req, res) => {
+app.put('/state/:userId?', requireAuth, async (req, res) => {
   const payload = req.body?.state;
   if (!payload || typeof payload !== 'object') {
     res.status(400).json({ error: 'INVALID_STATE' });
