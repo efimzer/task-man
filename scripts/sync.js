@@ -89,6 +89,69 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
   let lastSyncedVersion = null;
   let lastError = null;
   let pollTimer = null;
+  let loginPromise = null;
+  let isAuthenticated = false;
+
+  async function ensureAuthenticated() {
+    if (!includeCredentials) {
+      return;
+    }
+    if (!syncConfig.sessionCredentials?.email || !syncConfig.sessionCredentials?.password) {
+      return;
+    }
+    if (isAuthenticated) {
+      return;
+    }
+    if (loginPromise) {
+      return loginPromise;
+    }
+
+    const payload = {
+      email: syncConfig.sessionCredentials.email,
+      password: syncConfig.sessionCredentials.password
+    };
+
+    loginPromise = fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload)
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Auth failed (${response.status})`);
+        }
+        isAuthenticated = true;
+      })
+      .catch((error) => {
+        console.warn('Todo sync: auth error', error);
+        throw error;
+      })
+      .finally(() => {
+        loginPromise = null;
+      });
+
+    return loginPromise;
+  }
+
+  async function fetchWithAuth(input, init = {}, { retryOnUnauthorized = true } = {}) {
+    if (includeCredentials) {
+      await ensureAuthenticated();
+    }
+
+    const response = await fetch(input, {
+      ...init,
+      credentials: includeCredentials ? 'include' : init.credentials
+    });
+
+    if (response.status === 401 && retryOnUnauthorized && includeCredentials) {
+      isAuthenticated = false;
+      await ensureAuthenticated();
+      return fetchWithAuth(input, init, { retryOnUnauthorized: false });
+    }
+
+    return response;
+  }
 
   function setStatus(status) {
     lastError = status?.error ?? null;
@@ -111,10 +174,7 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     setStatus({});
 
     try {
-      const response = await fetch(stateUrl(), {
-        headers,
-        ...(includeCredentials ? { credentials: 'include' } : {})
-      });
+      const response = await fetchWithAuth(stateUrl(), { headers });
 
       if (response.status === 404) {
         const current = typeof getState === 'function' ? getState() : null;
@@ -189,11 +249,10 @@ export function createSyncManager({ getState, applyRemoteState, onStatusChange }
     setStatus({});
 
     try {
-      const response = await fetch(stateUrl(), {
+      const response = await fetchWithAuth(stateUrl(), {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ state: payload }),
-        ...(includeCredentials ? { credentials: 'include' } : {})
+        body: JSON.stringify({ state: payload })
       });
 
       if (!response.ok) {

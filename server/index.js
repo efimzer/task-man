@@ -3,7 +3,8 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import bcrypt from 'bcryptjs';
 import { join, dirname } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const PORT = process.env.PORT || 8787;
@@ -30,16 +31,17 @@ let state = {
 };
 
 try {
-  const existing = await import(`file://${DATA_FILE}`, { assert: { type: 'json' } });
-  if (existing?.default?.state) {
-    state = existing.default.state;
+  const raw = readFileSync(DATA_FILE, 'utf8');
+  const existing = JSON.parse(raw);
+  if (existing?.state) {
+    state = existing.state;
   }
 } catch (error) {
   state.meta.updatedAt = Date.now();
 }
 
 async function persist() {
-  await Bun.write(DATA_FILE, JSON.stringify({ state }, null, 2));
+  await writeFile(DATA_FILE, JSON.stringify({ state }, null, 2), 'utf8');
 }
 
 const app = express();
