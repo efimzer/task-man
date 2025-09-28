@@ -287,13 +287,6 @@ function applyRemoteState(remoteState) {
   render();
 }
 
-await authStore.init();
-const initialAuthUser = authStore.getUser();
-
-await bootstrapAuthContext(initialAuthUser?.email);
-
-let state = await loadState();
-
 const elements = {
   screenFolders: document.getElementById('screenFolders'),
   screenTasks: document.getElementById('screenTasks'),
@@ -324,6 +317,13 @@ const elements = {
   authError: document.getElementById('authError'),
   authTitle: document.getElementById('authTitle')
 };
+
+await authStore.init();
+const initialAuthUser = authStore.getUser();
+
+await bootstrapAuthContext(initialAuthUser?.email);
+
+let state = await loadState();
 
 normalizeLoadedState();
 
