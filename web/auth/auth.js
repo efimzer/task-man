@@ -39,10 +39,6 @@ const MODES = {
   login: {
     endpoint: '/api/auth/login',
     submitLabel: 'Войти'
-  },
-  register: {
-    endpoint: '/api/auth/register',
-    submitLabel: 'Создать аккаунт'
   }
 };
 
@@ -60,16 +56,13 @@ function setMode(nextMode) {
   mode = nextMode;
   const config = MODES[mode];
   elements.submitButton.textContent = config.submitLabel;
-  elements.passwordInput.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+  elements.passwordInput.autocomplete = 'current-password';
   elements.passwordInput.type = 'password';
   elements.passwordToggle.classList.remove('is-visible');
   elements.passwordToggle.setAttribute('aria-label', 'Показать пароль');
   elements.passwordToggle.setAttribute('aria-pressed', 'false');
   elements.passwordToggle.innerHTML = ICON_EYE_OPEN;
-  elements.tabLogin.classList.toggle('is-active', mode === 'login');
-  elements.tabRegister.classList.toggle('is-active', mode === 'register');
-  elements.tabLogin.setAttribute('aria-selected', String(mode === 'login'));
-  elements.tabRegister.setAttribute('aria-selected', String(mode === 'register'));
+  elements.tabLogin.classList.toggle('is-active', true);
   clearMessages();
 }
 
@@ -170,8 +163,7 @@ async function handleLogout() {
 }
 
 elements.form.addEventListener('submit', handleSubmit);
-elements.tabLogin.addEventListener('click', () => setMode('login'));
-elements.tabRegister.addEventListener('click', () => setMode('register'));
+elements.tabLogin?.addEventListener('click', () => setMode('login'));
 elements.logoutButton?.addEventListener('click', handleLogout);
 elements.passwordToggle.addEventListener('click', () => {
   const isVisible = elements.passwordInput.type === 'text';
