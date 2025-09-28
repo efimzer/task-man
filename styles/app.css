@@ -796,6 +796,12 @@ body {
   text-align: center;
 }
 
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .auth-inline-error {
   min-height: 18px;
   color: #ff4d4f;

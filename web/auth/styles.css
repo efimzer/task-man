@@ -321,6 +321,13 @@ body {
   margin-top: 12px;
   padding: 0;
   align-self: center;
+  color: var(--accent-strong);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-switch-mode:hover {
+  text-decoration: underline;
 }
 
 @supports (-webkit-touch-callout: none) {

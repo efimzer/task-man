@@ -10,6 +10,18 @@ const hasChromeStorage = typeof chrome !== 'undefined' && chrome.storage?.local;
 let syncManager = null;
 let storageKey = STORAGE_KEY;
 
+const shouldUseAuthCookies = (() => {
+  if (typeof window === 'undefined' || !syncConfig.baseUrl) {
+    return false;
+  }
+  try {
+    const target = new URL(syncConfig.baseUrl, window.location.origin);
+    return target.origin === window.location.origin;
+  } catch (error) {
+    return false;
+  }
+})();
+
 function resolveAssetPath(extensionPath, { webPath } = {}) {
   if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
     return chrome.runtime.getURL(extensionPath);
@@ -282,26 +294,6 @@ await bootstrapAuthContext(initialAuthUser?.email);
 
 let state = await loadState();
 
-authStore.subscribe(({ token, user }) => {
-  if (!token) {
-    stopSyncManager();
-    initialSyncCompleted = false;
-    const email = pendingAuthPrefillEmail || user?.email || elements.authEmail?.value || '';
-    showAuthOverlay({ errorMessage: pendingAuthErrorMessage, prefillEmail: email });
-    pendingAuthErrorMessage = '';
-    pendingAuthPrefillEmail = '';
-  } else if (elements.authOverlay && !elements.authOverlay.classList.contains('hidden')) {
-    hideAuthOverlay();
-  }
-});
-normalizeLoadedState();
-
-if (authStore.getToken()) {
-  await startSyncIfNeeded({ forcePull: true });
-} else {
-  showAuthOverlay();
-}
-
 const elements = {
   screenFolders: document.getElementById('screenFolders'),
   screenTasks: document.getElementById('screenTasks'),
@@ -332,6 +324,30 @@ const elements = {
   authError: document.getElementById('authError'),
   authTitle: document.getElementById('authTitle')
 };
+
+normalizeLoadedState();
+
+authStore.subscribe(({ token, user }) => {
+  if (!token) {
+    stopSyncManager();
+    initialSyncCompleted = false;
+    const email = pendingAuthPrefillEmail || user?.email || elements.authEmail?.value || '';
+    showAuthOverlay({ errorMessage: pendingAuthErrorMessage, prefillEmail: email });
+    pendingAuthErrorMessage = '';
+    pendingAuthPrefillEmail = '';
+  } else if (elements.authOverlay && !elements.authOverlay.classList.contains('hidden')) {
+    hideAuthOverlay();
+    void startSyncIfNeeded({ forcePull: true });
+  } else if (token) {
+    void startSyncIfNeeded();
+  }
+});
+
+if (authStore.getToken()) {
+  await startSyncIfNeeded({ forcePull: true });
+} else {
+  showAuthOverlay();
+}
 
 let currentScreen = null;
 let draggingTaskId = null;
@@ -429,6 +445,7 @@ function showAuthOverlay({ errorMessage, prefillEmail } = {}) {
   }
   if (elements.authPassword) {
     elements.authPassword.value = '';
+    elements.authPassword.type = 'password';
   }
   requestAnimationFrame(() => {
     elements.authEmail?.focus({ preventScroll: true });
@@ -453,7 +470,8 @@ async function authRequest(path, payload) {
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    credentials: shouldUseAuthCookies ? 'include' : 'omit'
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -504,7 +522,18 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
     try {
       if (!initialSyncCompleted || forcePull) {
         if (syncConfig.pullOnStartup !== false || forcePull) {
-          await syncManager.pullInitial();
+          const initialResult = await syncManager.pullInitial();
+          if (initialResult?.notFound) {
+            const fresh = defaultState();
+            state.folders = fresh.folders;
+            state.tasks = fresh.tasks;
+            state.archivedTasks = fresh.archivedTasks;
+            state.ui = { ...state.ui, ...fresh.ui };
+            state.meta = { ...fresh.meta };
+            ensureAllFolder(state);
+            await saveState(state, { skipRemote: true, updateMeta: false });
+            await syncManager.forcePush();
+          }
         }
         initialSyncCompleted = true;
       }
@@ -561,7 +590,8 @@ async function performLogout() {
     if (token) {
       await fetch(buildAuthUrl('/api/auth/logout'), {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: shouldUseAuthCookies ? 'include' : 'omit'
       });
     }
   } catch (error) {
@@ -1780,34 +1810,6 @@ function render() {
   renderFolders();
   renderTasks();
   updateFloatingAction();
-}
-
-syncManager = createSyncManager({
-  getState: () => state,
-  applyRemoteState
-});
-
-if (syncManager.enabled) {
-  let initialResult = null;
-  if (syncConfig.pullOnStartup !== false) {
-    initialResult = await syncManager.pullInitial();
-  }
-
-  if (typeof syncManager.startPolling === 'function') {
-    syncManager.startPolling();
-  }
-
-  if (initialResult?.notFound) {
-    const fresh = defaultState();
-    state.folders = fresh.folders;
-    state.tasks = fresh.tasks;
-    state.archivedTasks = fresh.archivedTasks;
-    state.ui = { ...state.ui, ...fresh.ui };
-    state.meta = { ...fresh.meta };
-    ensureAllFolder(state);
-    await saveState(state, { skipRemote: true, updateMeta: false });
-    await syncManager.forcePush();
-  }
 }
 
 render();

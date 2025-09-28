@@ -10,6 +10,8 @@ import { randomBytes, pbkdf2Sync } from 'node:crypto';
 const PORT = process.env.PORT || 8787;
 const DATA_FILE = process.env.TODO_SYNC_DB || join(process.cwd(), 'server', 'storage.json');
 const SESSION_TTL = Number(process.env.TODO_SESSION_TTL) || 1000 * 60 * 60 * 24 * 30; // 30 days
+const SESSION_COOKIE = process.env.TODO_SESSION_COOKIE || 'todo_token';
+const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
 
 mkdirSync(dirname(DATA_FILE), { recursive: true });
 
@@ -85,6 +87,15 @@ function issueToken(email) {
   return token;
 }
 
+function attachSessionCookie(res, token) {
+  res.cookie(SESSION_COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: COOKIE_SECURE,
+    maxAge: SESSION_TTL || undefined
+  });
+}
+
 function cleanupExpiredSessions() {
   if (!SESSION_TTL) {
     return;
@@ -111,6 +122,10 @@ function extractToken(req) {
   if (typeof fromQuery === 'string' && fromQuery.trim()) {
     return fromQuery.trim();
   }
+  const cookieToken = req.cookies?.[SESSION_COOKIE];
+  if (cookieToken) {
+    return cookieToken;
+  }
   return null;
 }
 
@@ -130,6 +145,10 @@ function resolveSession(req) {
 function requireAuth(req, res, next) {
   const resolved = resolveSession(req);
   if (!resolved) {
+    if (req.accepts('html')) {
+      res.redirect('/auth/');
+      return;
+    }
     res.status(401).json({ error: 'UNAUTHORIZED' });
     return;
   }
@@ -177,9 +196,9 @@ app.get('/auth', (req, res) => {
   res.sendFile(join(authDir, 'index.html'));
 });
 app.use('/auth', express.static(authDir));
-app.use('/web', express.static(join(rootDir, 'web')));
-app.use('/scripts', express.static(join(rootDir, 'scripts')));
-app.use('/styles', express.static(join(rootDir, 'styles')));
+app.use('/web', requireAuth, express.static(join(rootDir, 'web')));
+app.use('/scripts', requireAuth, express.static(join(rootDir, 'scripts')));
+app.use('/styles', requireAuth, express.static(join(rootDir, 'styles')));
 app.use('/icons', express.static(join(rootDir, 'icons')));
 app.use('/', express.static(rootDir));
 
@@ -220,6 +239,7 @@ app.post('/api/auth/register', async (req, res) => {
   };
 
   const token = issueToken(email);
+  attachSessionCookie(res, token);
   if (!data.states[email]) {
     data.states[email] = data.legacyState ? data.legacyState : defaultState();
     data.legacyState = null;
@@ -243,6 +263,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   const token = issueToken(email);
+  attachSessionCookie(res, token);
   await persist();
   res.json({ ok: true, token, user: { email } });
 });
@@ -253,6 +274,12 @@ app.post('/api/auth/logout', async (req, res) => {
     delete data.sessions[resolved.token];
     await persist();
   }
+  res.cookie(SESSION_COOKIE, '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: COOKIE_SECURE,
+    expires: new Date(0)
+  });
   res.json({ ok: true });
 });
 
