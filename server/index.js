@@ -40,7 +40,55 @@ let data = {
 try {
   const raw = readFileSync(DATA_FILE, 'utf8');
   const parsed = JSON.parse(raw);
-  if (parsed?.users || parsed?.states) {
+  
+  // Миграция старой структуры (массив users) в новую (объект users)
+  if (Array.isArray(parsed?.users)) {
+    console.log('Migrating old storage format...');
+    const oldUsers = parsed.users;
+    const oldSessions = parsed.sessions ?? {};
+    
+    // Конвертируем users из массива в объект с ключами email
+    const newUsers = {};
+    const sessionMapping = {}; // userId -> email
+    
+    oldUsers.forEach(user => {
+      const email = normalizeEmail(user.email);
+      newUsers[email] = {
+        email,
+        salt: user.salt || randomBytes(16).toString('hex'), // если нет salt, создаем
+        hash: user.passwordHash || user.hash, // поддерживаем оба поля
+        createdAt: user.createdAt
+      };
+      sessionMapping[user.id] = email;
+    });
+    
+    // Конвертируем sessions, заменяя userId на email
+    const newSessions = {};
+    Object.entries(oldSessions).forEach(([sessionId, session]) => {
+      const email = sessionMapping[session.userId];
+      if (email) {
+        newSessions[sessionId] = {
+          email,
+          createdAt: session.createdAt || Date.now()
+        };
+      }
+    });
+    
+    data = {
+      users: newUsers,
+      sessions: newSessions,
+      states: parsed.states ?? {},
+      legacyState: parsed.legacyState ?? null
+    };
+    
+    // Сохраняем мигрированную структуру
+    persist().then(() => {
+      console.log('Migration completed successfully');
+    }).catch(err => {
+      console.error('Migration save failed:', err);
+    });
+  } else if (parsed?.users || parsed?.states) {
+    // Новая структура
     data = {
       users: parsed.users ?? {},
       sessions: parsed.sessions ?? {},
@@ -51,6 +99,7 @@ try {
     data.legacyState = parsed.state;
   }
 } catch (error) {
+  console.error('Failed to load storage:', error.message);
   // fresh storage — keep defaults
 }
 
@@ -61,8 +110,34 @@ async function persist() {
     states: data.states,
     legacyState: data.legacyState
   };
-  await writeFile(DATA_FILE, JSON.stringify(snapshot, null, 2), 'utf8');
+  
+  try {
+    // Создаем backup перед сохранением
+    const backupFile = DATA_FILE + '.backup';
+    try {
+      const current = readFileSync(DATA_FILE, 'utf8');
+      await writeFile(backupFile, current, 'utf8');
+    } catch (e) {
+      // Игнорируем, если файла еще не существует
+    }
+    
+    await writeFile(DATA_FILE, JSON.stringify(snapshot, null, 2), 'utf8');
+    console.log(`[PERSIST] Saved data: ${Object.keys(data.users).length} users, ${Object.keys(data.states).length} states, ${Object.keys(data.sessions).length} sessions`);
+  } catch (error) {
+    console.error('[PERSIST ERROR]', error);
+    throw error;
+  }
 }
+
+// Периодическое сохранение каждые 5 минут
+setInterval(async () => {
+  try {
+    await persist();
+    console.log('[AUTO-SAVE] Data persisted successfully');
+  } catch (error) {
+    console.error('[AUTO-SAVE ERROR]', error);
+  }
+}, 5 * 60 * 1000);
 
 function normalizeEmail(email) {
   return typeof email === 'string' ? email.trim().toLowerCase() : '';
@@ -196,14 +271,24 @@ app.get('/auth', (req, res) => {
   res.sendFile(join(authDir, 'index.html'));
 });
 app.use('/auth', express.static(authDir));
-app.use('/web', requireAuth, express.static(join(rootDir, 'web')));
-app.use('/scripts', requireAuth, express.static(join(rootDir, 'scripts')));
-app.use('/styles', requireAuth, express.static(join(rootDir, 'styles')));
+app.use('/web', express.static(join(rootDir, 'web'))); // Убрали requireAuth
+app.use('/scripts', express.static(join(rootDir, 'scripts'))); // Убрали requireAuth
+app.use('/styles', express.static(join(rootDir, 'styles'))); // Убрали requireAuth
 app.use('/icons', express.static(join(rootDir, 'icons')));
 app.use('/', express.static(rootDir));
 
 app.get('/health', (req, res) => {
   res.json({ ok: true });
+});
+
+app.get('/api/debug/stats', (req, res) => {
+  res.json({
+    users: Object.keys(data.users).length,
+    sessions: Object.keys(data.sessions).length,
+    states: Object.keys(data.states).length,
+    userEmails: Object.keys(data.users),
+    stateEmails: Object.keys(data.states)
+  });
 });
 
 function validateCredentials(body) {
@@ -222,14 +307,18 @@ function validateCredentials(body) {
 app.post('/api/auth/register', async (req, res) => {
   const { email, password, errors } = validateCredentials(req.body);
   if (Object.keys(errors).length) {
+    console.log(`[REGISTER ERROR] Validation failed for ${email}:`, errors);
     res.status(400).json({ error: 'VALIDATION_ERROR', details: errors });
     return;
   }
   if (data.users[email]) {
+    console.log(`[REGISTER ERROR] Email already exists: ${email}`);
     res.status(409).json({ error: 'EMAIL_EXISTS' });
     return;
   }
 
+  console.log(`[REGISTER] Creating new user: ${email}`);
+  
   const credential = hashPassword(password);
   data.users[email] = {
     email,
@@ -243,9 +332,11 @@ app.post('/api/auth/register', async (req, res) => {
   if (!data.states[email]) {
     data.states[email] = data.legacyState ? data.legacyState : defaultState();
     data.legacyState = null;
+    console.log(`[REGISTER] Created initial state for ${email}`);
   }
 
   await persist();
+  console.log(`[REGISTER SUCCESS] User created: ${email}`);
   res.json({
     ok: true,
     token,
@@ -256,8 +347,18 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  
+  console.log(`[LOGIN] Attempt for ${email}`);
   const user = data.users[email];
-  if (!user || !verifyPassword(password, user)) {
+  
+  if (!user) {
+    console.log(`[LOGIN ERROR] User not found: ${email}. Available users: ${Object.keys(data.users).join(', ')}`);
+    res.status(401).json({ error: 'INVALID_CREDENTIALS' });
+    return;
+  }
+  
+  if (!verifyPassword(password, user)) {
+    console.log(`[LOGIN ERROR] Invalid password for ${email}`);
     res.status(401).json({ error: 'INVALID_CREDENTIALS' });
     return;
   }
@@ -265,6 +366,8 @@ app.post('/api/auth/login', async (req, res) => {
   const token = issueToken(email);
   attachSessionCookie(res, token);
   await persist();
+  
+  console.log(`[LOGIN SUCCESS] ${email}, state exists: ${!!data.states[email]}`);
   res.json({ ok: true, token, user: { email } });
 });
 
@@ -301,12 +404,19 @@ app.get('/state', requireAuth, (req, res) => {
 app.put('/state', requireAuth, async (req, res) => {
   const email = req.auth.email;
   const payload = req.body?.state;
+  
   if (!payload || typeof payload !== 'object') {
+    console.log(`[STATE UPDATE ERROR] Invalid state from ${email}`);
     res.status(400).json({ error: 'INVALID_STATE' });
     return;
   }
+  
+  console.log(`[STATE UPDATE] Updating state for ${email}, folders: ${payload.folders?.length || 0}, tasks: ${payload.tasks?.length || 0}`);
+  
   data.states[email] = payload;
   await persist();
+  
+  console.log(`[STATE UPDATE SUCCESS] State saved for ${email}`);
   res.json({ ok: true, meta: payload.meta ?? null });
 });
 
