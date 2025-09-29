@@ -163,12 +163,14 @@ function issueToken(email) {
 }
 
 function attachSessionCookie(res, token) {
+  console.log(`[COOKIE] Setting cookie: ${SESSION_COOKIE}, secure: ${COOKIE_SECURE}`);
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: COOKIE_SECURE,
+    sameSite: 'none', // Изменено с 'lax' на 'none' для поддержки расширения
+    secure: true, // Должно быть true когда sameSite='none'
     maxAge: SESSION_TTL || undefined
   });
+  // Также отправим token в теле ответа для обратной совместимости
 }
 
 function cleanupExpiredSessions() {
@@ -248,7 +250,7 @@ function getStateForUser(email) {
 const app = express();
 app.use(cors({
   origin: true,
-  credentials: false,
+  credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use((req, res, next) => {
@@ -379,8 +381,8 @@ app.post('/api/auth/logout', async (req, res) => {
   }
   res.cookie(SESSION_COOKIE, '', {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: COOKIE_SECURE,
+    sameSite: 'none',
+    secure: true,
     expires: new Date(0)
   });
   res.json({ ok: true });
