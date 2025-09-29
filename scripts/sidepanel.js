@@ -447,7 +447,7 @@ function updateAuthMode(mode) {
     elements.authSubmit.textContent = isLogin ? 'Войти' : 'Создать аккаунт';
   }
   if (elements.authToggleMode) {
-    elements.authToggleMode.textContent = isLogin ? 'Регистрация' : 'У меня есть аккаунт';
+    elements.authToggleMode.textContent = isLogin ? 'Регистрация' : 'Войти';
   }
 }
 
