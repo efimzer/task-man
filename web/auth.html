@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>GoFimaGo! — Авторизация</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon_io/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="./icons/favicon_io/favicon-16x16.png" />
+    <link rel="shortcut icon" href="./icons/favicon_io/favicon.ico" />
+    <style>
+      :root {
+        --bg-main: #f5f7fd;
+        --bg-card: #ffffff;
+        --bg-aside: linear-gradient(160deg, #4d6bff 0%, #7d35ff 100%);
+        --text-primary: #1f2330;
+        --text-secondary: #4c5165;
+        --text-invert: #ffffff;
+        --border-radius: 24px;
+        --shadow: 0 30px 60px rgba(44, 62, 132, 0.18);
+        --accent: #4d6bff;
+        --accent-strong: #374fe0;
+        --error: #ff4d4f;
+        --success: #2dc99a;
+        font-family: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg-main);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        color: var(--text-primary);
+      }
+
+      .auth-page {
+        width: min(900px, 100%);
+        background: var(--bg-card);
+        border-radius: var(--border-radius);
+        box-shadow: var(--shadow);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        overflow: hidden;
+        min-height: 500px;
+      }
+
+      .auth-card {
+        padding: 48px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 24px;
+      }
+
+      .auth-header h1 {
+        font-size: 32px;
+        margin: 0;
+        color: var(--text-primary);
+      }
+
+      .auth-subtitle {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 15px;
+        line-height: 1.5;
+      }
+
+      .field {
+        margin-bottom: 20px;
+      }
+
+      .label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 500;
+        color: var(--text-primary);
+        font-size: 14px;
+      }
+
+      .text-input {
+        width: 100%;
+        padding: 14px 16px;
+        border: 1px solid #e1e5e9;
+        border-radius: 12px;
+        font-size: 16px;
+        line-height: 1.5;
+        background: #ffffff;
+        color: var(--text-primary);
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+
+      .text-input:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(77, 107, 255, 0.1);
+      }
+
+      .input-with-action {
+        position: relative;
+      }
+
+      .toggle-password {
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 8px;
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        color: var(--text-secondary);
+        transition: background-color 0.2s;
+      }
+
+      .toggle-password:hover {
+        background: rgba(0, 0, 0, 0.05);
+      }
+
+      .auth-submit {
+        width: 100%;
+        padding: 14px 24px;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background-color 0.2s;
+        margin-bottom: 16px;
+      }
+
+      .auth-submit:hover {
+        background: var(--accent-strong);
+      }
+
+      .auth-submit:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .auth-link {
+        background: none;
+        border: none;
+        color: var(--accent);
+        cursor: pointer;
+        font-size: 14px;
+        padding: 8px 0;
+        text-decoration: none;
+        text-align: center;
+        transition: color 0.2s;
+      }
+
+      .auth-link:hover {
+        color: var(--accent-strong);
+        text-decoration: underline;
+      }
+
+      .auth-error {
+        color: var(--error);
+        margin: 8px 0;
+        font-size: 14px;
+        padding: 12px;
+        background: rgba(255, 77, 79, 0.1);
+        border-radius: 8px;
+        border-left: 3px solid var(--error);
+      }
+
+      .auth-success {
+        color: var(--success);
+        margin: 8px 0;
+        font-size: 14px;
+        padding: 12px;
+        background: rgba(45, 201, 154, 0.1);
+        border-radius: 8px;
+        border-left: 3px solid var(--success);
+      }
+
+      .auth-aside {
+        background: var(--bg-aside);
+        padding: 48px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-invert);
+        text-align: center;
+      }
+
+      .auth-illustration-copy h2 {
+        font-size: 28px;
+        margin: 0 0 16px 0;
+        font-weight: 700;
+      }
+
+      .auth-illustration-copy p {
+        margin: 0;
+        opacity: 0.9;
+        line-height: 1.6;
+        font-size: 16px;
+      }
+
+      .auth-illustration-image {
+        max-width: 180px;
+        margin-bottom: 32px;
+        border-radius: 16px;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .auth-footer {
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid #e1e5e9;
+        text-align: center;
+      }
+
+      @media (max-width: 768px) {
+        .auth-page {
+          grid-template-columns: 1fr;
+          max-width: 400px;
+        }
+        .auth-aside {
+          display: none;
+        }
+        body {
+          padding: 16px;
+        }
+        .auth-card {
+          padding: 32px 24px;
+        }
+      }
+
+      /* Режим загрузки */
+      .loading {
+        opacity: 0.7;
+        pointer-events: none;
+      }
+
+      .auth-submit.loading::after {
+        content: "...";
+        animation: dots 1.5s infinite;
+      }
+
+      @keyframes dots {
+        0%, 20% { content: ""; }
+        40% { content: "."; }
+        60% { content: ".."; }
+        80%, 100% { content: "..."; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="auth-page">
+      <section class="auth-card">
+        <header class="auth-header">
+          <div class="auth-brand">
+            <h1>GoFimaGo!</h1>
+          </div>
+          <p class="auth-subtitle">Войдите в аккаунт или создайте новый</p>
+        </header>
+
+        <div class="auth-content">
+          <form id="authForm" method="post" novalidate>
+            <div class="field">
+              <label class="label" for="email">Email</label>
+              <input class="text-input" id="email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required />
+            </div>
+
+            <div class="field">
+              <label class="label" for="password">Пароль</label>
+              <div class="input-with-action">
+                <input class="text-input" id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" minlength="6" required />
+                <button id="togglePassword" type="button" class="toggle-password" aria-label="Показать пароль" aria-pressed="false">👁</button>
+              </div>
+            </div>
+
+            <p id="errorMessage" class="auth-error hidden" role="alert"></p>
+            <p id="successMessage" class="auth-success hidden" role="status"></p>
+
+            <button id="submitButton" type="submit" class="auth-submit">Войти</button>
+            <button id="switchModeButton" type="button" class="auth-link">Создать аккаунт</button>
+          </form>
+        </div>
+
+        <footer class="auth-footer">
+          <button id="backButton" class="auth-link hidden" type="button">Назад</button>
+        </footer>
+      </section>
+
+      <aside class="auth-aside">
+        <div class="auth-illustration">
+          <img src="./gofima.png" alt="GoFimaGo" class="auth-illustration-image" onerror="this.style.display='none'" />
+          <div class="auth-illustration-copy">
+            <h2>Доступ с любых устройств</h2>
+            <p>Сохраняйте и синхронизируйте задачи между всеми вашими устройствами</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <script type="module" src="../scripts/auth-unified.js"></script>
+  </body>
+</html>
