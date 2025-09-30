@@ -163,14 +163,25 @@ function issueToken(email) {
 }
 
 function attachSessionCookie(res, token) {
-  console.log(`[COOKIE] Setting cookie: ${SESSION_COOKIE}, secure: ${COOKIE_SECURE}`);
-  res.cookie(SESSION_COOKIE, token, {
+  console.log(`[COOKIE] Setting cookie: ${SESSION_COOKIE}, secure: ${COOKIE_SECURE}, production: ${process.env.NODE_ENV === 'production'}`);
+  
+  const cookieOptions = {
     httpOnly: true,
-    sameSite: 'none', // Изменено с 'lax' на 'none' для поддержки расширения
-    secure: true, // Должно быть true когда sameSite='none'
     maxAge: SESSION_TTL || undefined
-  });
-  // Также отправим token в теле ответа для обратной совместимости
+  };
+  
+  // В production (на HTTPS): sameSite='none', secure=true
+  // В development: sameSite='lax', secure=false
+  if (COOKIE_SECURE) {
+    cookieOptions.sameSite = 'none';
+    cookieOptions.secure = true;
+  } else {
+    cookieOptions.sameSite = 'lax';
+    cookieOptions.secure = false;
+  }
+  
+  res.cookie(SESSION_COOKIE, token, cookieOptions);
+  console.log(`[COOKIE] Cookie options:`, cookieOptions);
 }
 
 function cleanupExpiredSessions() {
@@ -379,12 +390,21 @@ app.post('/api/auth/logout', async (req, res) => {
     delete data.sessions[resolved.token];
     await persist();
   }
-  res.cookie(SESSION_COOKIE, '', {
+  
+  const cookieOptions = {
     httpOnly: true,
-    sameSite: 'none',
-    secure: true,
     expires: new Date(0)
-  });
+  };
+  
+  if (COOKIE_SECURE) {
+    cookieOptions.sameSite = 'none';
+    cookieOptions.secure = true;
+  } else {
+    cookieOptions.sameSite = 'lax';
+    cookieOptions.secure = false;
+  }
+  
+  res.cookie(SESSION_COOKIE, '', cookieOptions);
   res.json({ ok: true });
 });
 
