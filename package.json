@@ -1,15 +1,18 @@
 {
-  "name": "todo-ext",
-  "version": "1.0.0",
+  "name": "todo-sync-server",
+  "version": "1.0.5",
   "type": "module",
-  "private": true,
   "scripts": {
-    "dev:server": "node server/index.js"
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
   },
   "dependencies": {
-    "cookie-parser": "^1.4.6",
-    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "lowdb": "^6.0.1"
+    "cors": "^2.8.5",
+    "cookie-parser": "^1.4.6",
+    "mongodb": "^6.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
