@@ -2,6 +2,7 @@ import { createSyncManager } from './sync.js';
 import { syncConfig } from './sync-config.js';
 import { authStore } from './auth.js';
 import { initSwipeNavigation } from './swipe-navigation.js';
+import { settingsManager } from './settings.js';
 
 const STORAGE_KEY = 'vuexyTodoState';
 const ALL_FOLDER_ID = 'all';
@@ -342,7 +343,17 @@ const elements = {
   authSubmit: document.getElementById('authSubmit'),
   authToggleMode: document.getElementById('authToggleMode'),
   authError: document.getElementById('authError'),
-  authTitle: document.getElementById('authTitle')
+  authTitle: document.getElementById('authTitle'),
+  // Settings screen
+  screenSettings: document.getElementById('screenSettings'),
+  backToFoldersFromSettings: document.getElementById('backToFoldersFromSettings'),
+  settingsAction: document.getElementById('settingsAction'),
+  darkModeToggle: document.getElementById('darkModeToggle'),
+  showCounterToggle: document.getElementById('showCounterToggle'),
+  showArchiveToggle: document.getElementById('showArchiveToggle'),
+  clearArchiveButton: document.getElementById('clearArchiveButton'),
+  changePasswordButton: document.getElementById('changePasswordButton'),
+  logoutButton: document.getElementById('logoutButton')
 };
 
 console.log('🗨️ Elements initialized:', {
@@ -1690,8 +1701,17 @@ function renderFolders() {
   counts[ARCHIVE_FOLDER_ID] = state.archivedTasks.length;
 
   const fragment = document.createDocumentFragment();
+  
+  // Check settings
+  const showArchive = settingsManager.get('showArchive');
+  const showCounter = settingsManager.get('showCounter');
 
   state.folders.forEach((folder) => {
+    // Skip archive folder if showArchive setting is false
+    if (folder.id === ARCHIVE_FOLDER_ID && !showArchive) {
+      return;
+    }
+    
     const node = elements.folderTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.folderId = folder.id;
     const highlight = currentScreen === 'tasks' && state.ui.selectedFolderId === folder.id;
@@ -1704,7 +1724,9 @@ function renderFolders() {
 
     const folderCount = counts[folder.id] ?? 0;
     countSpan.textContent = folderCount;
-    if (folderCount === 0) {
+    
+    // Show/hide counter based on settings
+    if (!showCounter || folderCount === 0) {
       countSpan.style.display = 'none';
     } else {
       countSpan.style.display = '';
@@ -1943,6 +1965,164 @@ const initialScreen = state.ui.activeScreen === 'tasks' ? 'tasks' : 'folders';
 showScreen(initialScreen, { skipPersist: true });
 
 document.querySelector('.app-shell')?.classList.add('is-ready');
+
+// Initialize settings
+await settingsManager.init();
+
+// Load settings into UI
+if (elements.darkModeToggle) {
+  elements.darkModeToggle.checked = settingsManager.get('darkMode');
+}
+if (elements.showCounterToggle) {
+  elements.showCounterToggle.checked = settingsManager.get('showCounter');
+}
+if (elements.showArchiveToggle) {
+  elements.showArchiveToggle.checked = settingsManager.get('showArchive');
+}
+
+// Settings handlers
+if (elements.settingsAction) {
+  elements.settingsAction.addEventListener('click', (event) => {
+    event.preventDefault();
+    closeAppMenu();
+    showSettingsScreen();
+  });
+}
+
+if (elements.backToFoldersFromSettings) {
+  elements.backToFoldersFromSettings.addEventListener('click', () => {
+    hideSettingsScreen();
+  });
+}
+
+if (elements.darkModeToggle) {
+  elements.darkModeToggle.addEventListener('change', async (event) => {
+    await settingsManager.set('darkMode', event.target.checked);
+  });
+}
+
+if (elements.showCounterToggle) {
+  elements.showCounterToggle.addEventListener('change', async (event) => {
+    await settingsManager.set('showCounter', event.target.checked);
+    render(); // Re-render to show/hide counters
+  });
+}
+
+if (elements.showArchiveToggle) {
+  elements.showArchiveToggle.addEventListener('change', async (event) => {
+    await settingsManager.set('showArchive', event.target.checked);
+    render(); // Re-render to show/hide archive folder
+  });
+}
+
+if (elements.clearArchiveButton) {
+  elements.clearArchiveButton.addEventListener('click', () => {
+    if (!state.archivedTasks.length) {
+      return;
+    }
+    const confirmed = window.confirm('Очистить архив задач?');
+    if (!confirmed) {
+      return;
+    }
+    state.archivedTasks = [];
+    persistState();
+    if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+      render();
+    }
+  });
+}
+
+if (elements.changePasswordButton) {
+  elements.changePasswordButton.addEventListener('click', async () => {
+    const currentPassword = prompt('Введите текущий пароль:');
+    if (!currentPassword) return;
+    
+    const newPassword = prompt('Введите новый пароль (минимум 6 символов):');
+    if (!newPassword || newPassword.length < 6) {
+      alert('Пароль должен содержать минимум 6 символов');
+      return;
+    }
+    
+    const confirmPassword = prompt('Подтвердите новый пароль:');
+    if (newPassword !== confirmPassword) {
+      alert('Пароли не совпадают');
+      return;
+    }
+    
+    try {
+      const token = authStore.getToken();
+      const response = await fetch(buildAuthUrl('/api/auth/change-password'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword
+        }),
+        credentials: shouldUseAuthCookies ? 'include' : 'omit'
+      });
+      
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data?.message || 'Не удалось изменить пароль');
+      }
+      
+      alert('Пароль успешно изменён');
+    } catch (error) {
+      alert(error.message || 'Ошибка при изменении пароля');
+    }
+  });
+}
+
+if (elements.logoutButton) {
+  elements.logoutButton.addEventListener('click', async () => {
+    const confirmed = window.confirm('Выйти из аккаунта?');
+    if (confirmed) {
+      await performLogout();
+      hideSettingsScreen();
+    }
+  });
+}
+
+function showSettingsScreen() {
+  // Hide other screens
+  elements.screenFolders.classList.remove('is-active', 'screen-enter');
+  elements.screenTasks.classList.remove('is-active', 'screen-enter');
+  
+  // Show settings screen
+  elements.screenSettings.classList.remove('hidden');
+  elements.screenSettings.classList.add('is-active');
+  requestAnimationFrame(() => {
+    elements.screenSettings.classList.add('screen-enter');
+    elements.screenSettings.addEventListener('animationend', () => {
+      elements.screenSettings.classList.remove('screen-enter');
+    }, { once: true });
+  });
+  
+  currentScreen = 'settings';
+  updateFloatingAction();
+}
+
+function hideSettingsScreen() {
+  elements.screenSettings.classList.remove('is-active', 'screen-enter');
+  elements.screenSettings.classList.add('hidden');
+  
+  // Return to folders screen
+  showScreen('folders');
+}
+
+// Subscribe to settings changes
+settingsManager.subscribe((settings) => {
+  // Update UI based on settings
+  if (settings.showCounter !== undefined) {
+    render();
+  }
+  if (settings.showArchive !== undefined) {
+    render();
+  }
+});
 
 // Инициализация свайп-навигации для PWA
 initSwipeNavigation();

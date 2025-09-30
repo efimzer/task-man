@@ -26,4 +26,12 @@
   --danger-border: #d92d20;
   --danger-bg: rgba(217, 45, 32, 0.08);
   --cards-edge-gap: 1px;
+
+  /* Settings */
+  --toggle-bg: rgba(100, 112, 134, 0.3);
+  --surface-raised: rgba(255, 255, 255, 0.85);
+  --surface-hover: rgba(255, 255, 255, 0.95);
+  --primary: #3f6ae0;
+  --primary-light: rgba(63, 106, 224, 0.2);
+  --error: #ef4444;
 }
