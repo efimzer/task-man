@@ -91,17 +91,16 @@ chrome.action.onClicked.addListener(async (tab) => {
   // Синхронизируем при открытии
   await syncCookieToStorage();
   
+  // Side panel должен открываться автоматически при клике на иконку
+  // Если есть API sidePanel, он откроется сам
   if (chrome.sidePanel && tab?.windowId !== undefined) {
     try {
       await chrome.sidePanel.open({ windowId: tab.windowId });
-      return;
     } catch (error) {
       console.warn('Unable to open side panel:', error);
     }
   }
-
-  // Fallback: open the UI in a new tab if side panel API is unavailable
-  chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
+  // Убираем fallback - пусть расширение работает только как side panel
 });
 
 console.log('🚀 Background script loaded');
