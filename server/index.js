@@ -427,6 +427,67 @@ app.post('/api/auth/logout', async (req, res) => {
   }
 });
 
+app.post('/api/auth/password', async (req, res) => {
+  try {
+    const resolved = await resolveSession(req);
+    if (!resolved) {
+      res.status(401).json({ error: 'UNAUTHORIZED' });
+      return;
+    }
+    
+    const email = resolved.email;
+    const oldPassword = req.body?.oldPassword || req.body?.currentPassword;
+    const newPassword = req.body?.newPassword || req.body?.password;
+    
+    console.log(`[PASSWORD CHANGE] Attempt for ${email}`);
+    
+    if (!oldPassword || !newPassword) {
+      res.status(400).json({ error: 'MISSING_FIELDS', message: 'Укажите старый и новый пароль' });
+      return;
+    }
+    
+    if (newPassword.length < 6) {
+      res.status(400).json({ error: 'INVALID_PASSWORD', message: 'Новый пароль должен содержать минимум 6 символов' });
+      return;
+    }
+    
+    const user = await usersCollection.findOne({ email });
+    if (!user) {
+      res.status(404).json({ error: 'USER_NOT_FOUND' });
+      return;
+    }
+    
+    // Проверить старый пароль
+    if (!verifyPassword(oldPassword, user)) {
+      console.log(`[PASSWORD CHANGE ERROR] Invalid old password for ${email}`);
+      res.status(401).json({ error: 'INVALID_PASSWORD', message: 'Неверный текущий пароль' });
+      return;
+    }
+    
+    // Создать новый хэш
+    const credential = hashPassword(newPassword);
+    
+    // Обновить пароль
+    await usersCollection.updateOne(
+      { email },
+      { 
+        $set: { 
+          salt: credential.salt,
+          hash: credential.hash,
+          passwordChangedAt: Date.now()
+        } 
+      }
+    );
+    
+    console.log(`[PASSWORD CHANGE SUCCESS] Password changed for ${email}`);
+    
+    res.json({ ok: true, message: 'Пароль успешно изменён' });
+  } catch (error) {
+    console.error('[PASSWORD CHANGE ERROR]', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.get('/api/auth/me', async (req, res) => {
   try {
     const resolved = await resolveSession(req);
