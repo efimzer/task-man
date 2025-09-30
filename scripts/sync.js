@@ -181,7 +181,7 @@ export function createSyncManager({
     return pullLatest({ skipIfUnchanged: false });
   }
 
-  async function pushState({ force = false } = {}) {
+  async function pushState({ force = false, retryCount = 0 } = {}) {
     if (isPushing) {
       return false;
     }
@@ -193,12 +193,37 @@ export function createSyncManager({
       return false;
     }
 
-    const payload = cloneState(currentState);
-
     isPushing = true;
     setStatus({});
 
     try {
+      // Сначала получаем текущую версию с сервера для проверки конфликтов
+      const checkResponse = await authorizedFetch(stateEndpoint);
+      
+      if (checkResponse.ok) {
+        const serverState = await checkResponse.json();
+        const serverVersion = serverState?.meta?.version ?? null;
+        
+        // Если серверная версия новее локальной - конфликт!
+        if (serverVersion !== null && currentVersion !== null && serverVersion > currentVersion) {
+          console.warn(`Todo sync: server version (${serverVersion}) > local version (${currentVersion}), pulling first`);
+          isPushing = false;
+          
+          // Pull новые данные с сервера
+          const pullResult = await pullLatest({ skipIfUnchanged: false });
+          
+          // Если pull успешен и мы ещё не превысили лимит retry - попробовать push снова
+          if (pullResult.applied && retryCount < 3) {
+            console.log(`Todo sync: retrying push after pull (attempt ${retryCount + 1})`);
+            await new Promise(resolve => setTimeout(resolve, 100)); // Небольшая задержка
+            return pushState({ force: true, retryCount: retryCount + 1 });
+          }
+          
+          return false;
+        }
+      }
+      
+      const payload = cloneState(currentState);
       const response = await authorizedFetch(stateEndpoint, {
         method: 'PUT',
         body: JSON.stringify({ state: payload })
@@ -211,6 +236,11 @@ export function createSyncManager({
       const result = await response.json();
       const syncedVersion = result?.meta?.version ?? currentVersion;
       lastSyncedVersion = syncedVersion ?? currentVersion;
+      
+      if (retryCount > 0) {
+        console.log(`Todo sync: push successful after ${retryCount} retries`);
+      }
+      
       setStatus({});
       return true;
     } catch (error) {
