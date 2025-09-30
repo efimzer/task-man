@@ -1035,6 +1035,20 @@ body {
   box-shadow: 0 0 0 2px var(--primary-light);
 }
 
+.settings-toggle input:disabled + .settings-toggle-slider {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-toggle input:disabled + .settings-toggle-slider:before {
+  background-color: rgba(255, 255, 255, 0.75);
+}
+
+.settings-item.is-disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 /* Settings Button */
 .settings-button {
   display: flex;

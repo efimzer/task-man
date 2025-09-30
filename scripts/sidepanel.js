@@ -348,6 +348,7 @@ const elements = {
   screenSettings: document.getElementById('screenSettings'),
   backToFoldersFromSettings: document.getElementById('backToFoldersFromSettings'),
   settingsAction: document.getElementById('settingsAction'),
+  autoThemeToggle: document.getElementById('autoThemeToggle'),
   darkModeToggle: document.getElementById('darkModeToggle'),
   showCounterToggle: document.getElementById('showCounterToggle'),
   showArchiveToggle: document.getElementById('showArchiveToggle'),
@@ -398,10 +399,7 @@ console.log('📋 Loaded state:', {
 normalizeLoadedState();
 
 await settingsManager.init();
-
-if (elements.darkModeToggle) {
-  elements.darkModeToggle.checked = settingsManager.get('darkMode');
-}
+updateThemeControls();
 if (elements.showCounterToggle) {
   elements.showCounterToggle.checked = settingsManager.get('showCounter');
 }
@@ -1921,6 +1919,26 @@ function updateFloatingAction() {
   fab.classList.add('is-hidden');
 }
 
+function updateThemeControls() {
+  const autoEnabled = settingsManager.get('autoTheme');
+  const activeDarkMode = settingsManager.isDarkModeActive();
+
+  if (elements.autoThemeToggle) {
+    elements.autoThemeToggle.checked = autoEnabled;
+  }
+  if (elements.darkModeToggle) {
+    elements.darkModeToggle.checked = activeDarkMode;
+    elements.darkModeToggle.disabled = autoEnabled;
+    const container = elements.darkModeToggle.closest('.settings-item');
+    container?.classList.toggle('is-disabled', autoEnabled);
+    if (autoEnabled) {
+      elements.darkModeToggle.setAttribute('aria-disabled', 'true');
+    } else {
+      elements.darkModeToggle.removeAttribute('aria-disabled');
+    }
+  }
+}
+
 function getFolderName(folderId) {
   return state.folders.find((folder) => folder.id === folderId)?.name ?? 'Папка';
 }
@@ -1994,9 +2012,17 @@ if (elements.backToFoldersFromSettings) {
   });
 }
 
+if (elements.autoThemeToggle) {
+  elements.autoThemeToggle.addEventListener('change', async (event) => {
+    await settingsManager.set('autoTheme', event.target.checked);
+    updateThemeControls();
+  });
+}
+
 if (elements.darkModeToggle) {
   elements.darkModeToggle.addEventListener('change', async (event) => {
     await settingsManager.set('darkMode', event.target.checked);
+    updateThemeControls();
   });
 }
 
@@ -2143,6 +2169,9 @@ function hideSettingsScreen() {
 // Subscribe to settings changes
 settingsManager.subscribe((settings) => {
   // Update UI based on settings
+  if (settings.autoTheme !== undefined || settings.darkMode !== undefined) {
+    updateThemeControls();
+  }
   if (settings.showCounter !== undefined) {
     render();
   }
