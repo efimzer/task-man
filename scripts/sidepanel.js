@@ -640,20 +640,23 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
   if (!syncBootstrapInFlight) {
     syncBootstrapInFlight = true;
     try {
-      if (!initialSyncCompleted || forcePull) {
-        if (syncConfig.pullOnStartup !== false || forcePull) {
-          const initialResult = await syncManager.pullInitial();
-          if (initialResult?.notFound) {
-            const fresh = defaultState();
-            state.folders = fresh.folders;
-            state.tasks = fresh.tasks;
-            state.archivedTasks = fresh.archivedTasks;
-            state.ui = { ...state.ui, ...fresh.ui };
-            state.meta = { ...fresh.meta };
-            ensureAllFolder(state);
-            await saveState(state, { skipRemote: true, updateMeta: false });
-            await syncManager.forcePush();
-          }
+      // Если forcePull=true - всегда делаем pull, независимо от initialSyncCompleted
+      if (forcePull || (!initialSyncCompleted && syncConfig.pullOnStartup !== false)) {
+        console.log('📥 Force pulling initial state from server');
+        const initialResult = await syncManager.pullInitial();
+        if (initialResult?.notFound) {
+          const fresh = defaultState();
+          state.folders = fresh.folders;
+          state.tasks = fresh.tasks;
+          state.archivedTasks = fresh.archivedTasks;
+          state.ui = { ...state.ui, ...fresh.ui };
+          state.meta = { ...fresh.meta };
+          ensureAllFolder(state);
+          await saveState(state, { skipRemote: true, updateMeta: false });
+          await syncManager.forcePush();
+        }
+        if (forcePull) {
+          console.log('✅ Force pull completed, state version:', state.meta.version);
         }
         initialSyncCompleted = true;
       }
