@@ -212,7 +212,9 @@ body {
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
-  padding: 4px;
+  padding: 0;
+  min-width: 24px;
+  min-height: 24px;
   border-radius: 10px;
   transition: background 0.2s ease, color 0.2s ease;
 }
@@ -223,8 +225,7 @@ body {
 }
 
 .folder-menu-button.hidden {
-  visibility: hidden;
-  pointer-events: none;
+  display: none;
 }
 
 .back-button {
@@ -490,13 +491,17 @@ body {
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   border-radius: 12px;
   cursor: pointer;
   font-size: 20px;
   justify-self: end;
   align-self: center;
+  padding: 0;
+  margin: 0;
   transition: background 0.2s ease, color 0.2s ease;
 }
 

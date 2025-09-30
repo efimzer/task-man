@@ -229,6 +229,12 @@ app.use('/web', express.static(join(rootDir, 'web')));
 app.use('/scripts', express.static(join(rootDir, 'scripts')));
 app.use('/styles', express.static(join(rootDir, 'styles')));
 app.use('/icons', express.static(join(rootDir, 'icons')));
+
+// Redirect root to /web/
+app.get('/', (req, res) => {
+  res.redirect('/web/');
+});
+
 app.use('/', express.static(rootDir));
 
 app.get('/health', (req, res) => {
@@ -240,6 +246,11 @@ app.get('/health', (req, res) => {
     dbConnected: db !== null,
     timestamp: new Date().toISOString()
   });
+});
+
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain');
+  res.send('User-agent: *\nDisallow: /');
 });
 
 app.get('/api/debug/stats', async (req, res) => {
@@ -548,6 +559,11 @@ setInterval(() => {
     console.error('[CLEANUP ERROR]', err);
   });
 }, 60 * 60 * 1000); // Каждый час
+
+// 404 handler - должен быть последним
+app.use((req, res) => {
+  res.status(404).sendFile(join(rootDir, 'web/404.html'));
+});
 
 // Запуск сервера
 await connectDB();

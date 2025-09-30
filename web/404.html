@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="theme-color" content="#f1f4ff" />
+    <title>404 - Страница не найдена | GoFimaGo!</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon_io/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon_io/favicon-16x16.png" />
+    <link rel="shortcut icon" href="/icons/favicon_io/favicon.ico" />
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, sans-serif;
+        background: linear-gradient(160deg, rgba(244, 246, 248, 0.95), rgba(244, 248, 248, 0.95));
+        color: rgba(34, 39, 53, 0.92);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 500px;
+        text-align: center;
+        background: rgba(255, 255, 255, 0.72);
+        padding: 48px 32px;
+        border-radius: 20px;
+        border: 1px solid rgba(100, 112, 134, 0.18);
+        box-shadow: 0 18px 40px rgba(82, 90, 110, 0.12);
+      }
+
+      .error-code {
+        font-size: 72px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #3f6ae0, #97a9db);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 16px;
+      }
+
+      h1 {
+        font-size: 24px;
+        font-weight: 600;
+        margin-bottom: 12px;
+        color: rgba(34, 39, 53, 0.92);
+      }
+
+      p {
+        font-size: 16px;
+        color: rgba(34, 39, 53, 0.64);
+        margin-bottom: 32px;
+        line-height: 1.6;
+      }
+
+      .button {
+        display: inline-block;
+        padding: 14px 32px;
+        background: linear-gradient(160deg, #3f6ae0, #97a9db);
+        color: #ffffff;
+        text-decoration: none;
+        border-radius: 12px;
+        font-weight: 500;
+        font-size: 16px;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        box-shadow: 0 8px 20px rgba(63, 106, 224, 0.28);
+      }
+
+      .button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 28px rgba(63, 106, 224, 0.35);
+      }
+
+      .button:active {
+        transform: translateY(0);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: linear-gradient(160deg, rgba(16, 22, 45, 0.8), rgba(29, 35, 61, 0.65));
+          color: rgba(240, 242, 250, 0.95);
+        }
+
+        .container {
+          background: rgba(49, 52, 70, 0.5);
+          border-color: rgba(132, 139, 168, 0.14);
+          box-shadow: 0 18px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+          color: rgba(240, 242, 250, 0.95);
+        }
+
+        p {
+          color: rgba(240, 242, 250, 0.7);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="error-code">404</div>
+      <h1>Страница не найдена</h1>
+      <p>К сожалению, запрашиваемая страница не существует или была перемещена.</p>
+      <a href="/web/" class="button">Вернуться на главную</a>
+    </div>
+  </body>
+</html>
