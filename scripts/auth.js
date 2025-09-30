@@ -1,7 +1,7 @@
 const STORAGE_TOKEN_KEY = 'todoAuthToken';
 const STORAGE_USER_KEY = 'todoAuthUser';
 const COOKIE_URL = 'https://task-man-rf22.onrender.com';
-const TOKEN_COOKIE_NAME = 'token';
+const TOKEN_COOKIE_NAME = 'todo_token'; // Исправлено: было 'token', должно быть 'todo_token'
 
 const isChromeExtension = typeof chrome !== 'undefined' && chrome.storage?.local;
 const hasCookieAPI = typeof chrome !== 'undefined' && chrome.cookies;
@@ -153,7 +153,13 @@ async function persistToStorage() {
     return;
   }
   
-  // В веб-версии: сохраняем только user в localStorage (токен в cookie)
+  // В веб-версии: сохраняем И token И user в localStorage
+  if (currentToken) {
+    writeLocalStorage(STORAGE_TOKEN_KEY, currentToken);
+  } else {
+    writeLocalStorage(STORAGE_TOKEN_KEY, null);
+  }
+  
   if (currentUser) {
     writeLocalStorage(STORAGE_USER_KEY, JSON.stringify(currentUser));
   } else {

@@ -1,6 +1,6 @@
 const COOKIE_DOMAIN = 'task-man-rf22.onrender.com';
 const COOKIE_URL = 'https://task-man-rf22.onrender.com';
-const TOKEN_COOKIE_NAME = 'token';
+const TOKEN_COOKIE_NAME = 'todo_token'; // Исправлено: было 'token', должно быть 'todo_token'
 const STORAGE_TOKEN_KEY = 'todoAuthToken';
 const STORAGE_USER_KEY = 'todoAuthUser';
 
@@ -21,11 +21,15 @@ const enableSidePanel = () => {
 async function syncCookieToStorage() {
   try {
     console.log('🔄 Background: Syncing cookie to storage...');
+    console.log('🔍 Background: Checking cookie at URL:', COOKIE_URL);
+    console.log('🔍 Background: Cookie name:', TOKEN_COOKIE_NAME);
     
     const cookie = await chrome.cookies.get({
       url: COOKIE_URL,
       name: TOKEN_COOKIE_NAME
     });
+
+    console.log('🍪 Background: Cookie result:', cookie);
 
     if (cookie?.value) {
       console.log('✅ Background: Found cookie, saving to storage');
@@ -34,6 +38,14 @@ async function syncCookieToStorage() {
       });
     } else {
       console.log('❌ Background: No cookie found, clearing storage');
+      console.log('🔍 Background: Trying to get ALL cookies for domain...');
+      
+      // Проверим все cookies для домена
+      const allCookies = await chrome.cookies.getAll({
+        domain: COOKIE_DOMAIN
+      });
+      console.log('🍪 Background: All cookies for domain:', allCookies);
+      
       await chrome.storage.local.remove([STORAGE_TOKEN_KEY, STORAGE_USER_KEY]);
     }
   } catch (error) {
@@ -89,18 +101,14 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.action.onClicked.addListener(async (tab) => {
   // Синхронизируем при открытии
-  await syncCookieToStorage();
+  syncCookieToStorage(); // Убираем await - пусть работает асинхронно
   
-  // Side panel должен открываться автоматически при клике на иконку
-  // Если есть API sidePanel, он откроется сам
+  // Side panel должен открываться СРАЗУ при клике
   if (chrome.sidePanel && tab?.windowId !== undefined) {
-    try {
-      await chrome.sidePanel.open({ windowId: tab.windowId });
-    } catch (error) {
+    chrome.sidePanel.open({ windowId: tab.windowId }).catch((error) => {
       console.warn('Unable to open side panel:', error);
-    }
+    });
   }
-  // Убираем fallback - пусть расширение работает только как side panel
 });
 
 console.log('🚀 Background script loaded');
