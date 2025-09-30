@@ -291,7 +291,13 @@ app.use('/icons', express.static(join(rootDir, 'icons')));
 app.use('/', express.static(rootDir));
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true });
+  res.json({ 
+    ok: true, 
+    version: '1.0.5',
+    cookieSecure: COOKIE_SECURE,
+    nodeEnv: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get('/api/debug/stats', (req, res) => {
