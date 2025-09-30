@@ -1,6 +1,6 @@
 /**
  * Swipe Navigation Module
- * Handles left/right swipe gestures for PWA navigation
+ * Handles left/right swipe gestures for internal screen navigation (SPA)
  */
 
 export function initSwipeNavigation() {
@@ -11,13 +11,14 @@ export function initSwipeNavigation() {
   let isSwiping = false;
   let swipeTarget = null;
   
-  const MIN_SWIPE_DISTANCE = 50; // минимальная дистанция для срабатывания свайпа
+  const MIN_SWIPE_DISTANCE = 80; // минимальная дистанция для срабатывания свайпа
   const MAX_VERTICAL_DRIFT = 50; // максимальное вертикальное отклонение
   const EDGE_THRESHOLD = 50; // зона у края экрана для начала свайпа
   
   // Элементы для анимации
   const screenTasks = document.getElementById('screenTasks');
   const screenFolders = document.getElementById('screenFolders');
+  const backButton = document.getElementById('backToFolders');
   
   if (!screenTasks || !screenFolders) {
     console.warn('Swipe navigation: screens not found');
@@ -27,9 +28,10 @@ export function initSwipeNavigation() {
   /**
    * Применить transform для эффекта свайпа
    */
-  function applySwipeTransform(element, translateX) {
+  function applySwipeTransform(element, translateX, opacity = 1) {
     if (!element) return;
     element.style.transform = `translateX(${translateX}px)`;
+    element.style.opacity = String(opacity);
     element.style.transition = 'none';
   }
   
@@ -39,9 +41,10 @@ export function initSwipeNavigation() {
   function resetSwipeTransform(element, animate = true) {
     if (!element) return;
     if (animate) {
-      element.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+      element.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease';
     }
     element.style.transform = 'translateX(0)';
+    element.style.opacity = '1';
     
     if (animate) {
       setTimeout(() => {
@@ -51,17 +54,27 @@ export function initSwipeNavigation() {
   }
   
   /**
-   * Анимация навигации назад
+   * Анимация перехода назад к папкам
    */
   function animateNavigateBack() {
-    if (!screenTasks) return;
+    if (!screenTasks || !backButton) return;
     
-    screenTasks.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+    console.log('🔙 Swipe: Navigating back to folders');
+    
+    // Анимация: экран задач уезжает вправо
+    screenTasks.style.transition = 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease';
     screenTasks.style.transform = 'translateX(100%)';
+    screenTasks.style.opacity = '0';
     
+    // Через 100ms кликаем на кнопку "Назад" для настоящей навигации
     setTimeout(() => {
-      history.back();
-      // Сброс после навигации произойдёт автоматически при смене экрана
+      backButton.click();
+      // Сброс стилей после завершения
+      setTimeout(() => {
+        screenTasks.style.transition = '';
+        screenTasks.style.transform = '';
+        screenTasks.style.opacity = '';
+      }, 100);
     }, 100);
   }
   
@@ -69,43 +82,34 @@ export function initSwipeNavigation() {
    * Проверка: можно ли свайпнуть назад
    */
   function canSwipeBack() {
-    // Свайп назад работает только на экране задач
-    return screenTasks && !screenTasks.classList.contains('hidden');
-  }
-  
-  /**
-   * Проверка: можно ли свайпнуть вперёд
-   */
-  function canSwipeForward() {
-    // Свайп вперёд работает только если есть history forward
-    // Пока не реализовано, можно добавить позже
-    return false;
+    // Свайп назад работает только когда экран задач активен
+    return screenTasks && !screenTasks.classList.contains('hidden') && screenTasks.classList.contains('is-active');
   }
   
   /**
    * Обработка начала касания
    */
   function handleTouchStart(e) {
-    // Игнорируем если касание не у края экрана
+    if (!canSwipeBack()) {
+      return;
+    }
+    
+    // Игнорируем если это input/textarea/button
+    const target = e.target;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON')) {
+      return;
+    }
+    
     const touch = e.touches[0];
     touchStartX = touch.clientX;
     touchStartY = touch.clientY;
     
-    // Проверяем что касание началось у левого или правого края
+    // Проверяем что касание началось у левого края (для свайпа вправо)
     const isLeftEdge = touchStartX < EDGE_THRESHOLD;
-    const isRightEdge = touchStartX > window.innerWidth - EDGE_THRESHOLD;
     
-    if (!isLeftEdge && !isRightEdge) {
-      return;
-    }
-    
-    // Проверяем что можем свайпнуть
-    if (isRightEdge && canSwipeBack()) {
+    if (isLeftEdge) {
       isSwiping = true;
       swipeTarget = 'back';
-    } else if (isLeftEdge && canSwipeForward()) {
-      isSwiping = true;
-      swipeTarget = 'forward';
     }
   }
   
@@ -113,7 +117,7 @@ export function initSwipeNavigation() {
    * Обработка движения
    */
   function handleTouchMove(e) {
-    if (!isSwiping) return;
+    if (!isSwiping || !canSwipeBack()) return;
     
     const touch = e.touches[0];
     touchEndX = touch.clientX;
@@ -129,15 +133,16 @@ export function initSwipeNavigation() {
       return;
     }
     
-    // Применяем визуальный эффект
-    if (swipeTarget === 'back' && deltaX < 0) {
-      // Свайп влево (назад) - двигаем экран задач вправо
-      const progress = Math.max(0, Math.min(1, Math.abs(deltaX) / window.innerWidth));
+    // Свайп вправо (→ назад к папкам)
+    if (swipeTarget === 'back' && deltaX > 0) {
+      const progress = Math.max(0, Math.min(1, deltaX / window.innerWidth));
       const translateX = progress * window.innerWidth;
-      applySwipeTransform(screenTasks, translateX);
+      const opacity = 1 - (progress * 0.3); // Лёгкое затемнение
       
-      // Предотвращаем прокрутку страницы
-      if (Math.abs(deltaX) > 10) {
+      applySwipeTransform(screenTasks, translateX, opacity);
+      
+      // Предотвращаем прокрутку страницы если свайп достаточно горизонтальный
+      if (Math.abs(deltaX) > 10 && Math.abs(deltaX) > deltaY) {
         e.preventDefault();
       }
     }
@@ -157,15 +162,10 @@ export function initSwipeNavigation() {
     const isHorizontalSwipe = absDeltaX > deltaY;
     
     if (isHorizontalSwipe && absDeltaX > MIN_SWIPE_DISTANCE) {
-      // Свайп влево (назад)
-      if (deltaX < 0 && swipeTarget === 'back' && canSwipeBack()) {
+      // Свайп вправо (→ назад к папкам)
+      if (deltaX > 0 && swipeTarget === 'back' && canSwipeBack()) {
         animateNavigateBack();
-      }
-      // Свайп вправо (вперёд) - пока не реализовано
-      else if (deltaX > 0 && swipeTarget === 'forward' && canSwipeForward()) {
-        // history.forward();
-      }
-      else {
+      } else {
         resetSwipeTransform(screenTasks);
       }
     } else {
@@ -198,7 +198,7 @@ export function initSwipeNavigation() {
   document.addEventListener('touchend', handleTouchEnd, { passive: true });
   document.addEventListener('touchcancel', handleTouchCancel, { passive: true });
   
-  console.log('✅ Swipe navigation initialized');
+  console.log('✅ Swipe navigation initialized (SPA mode)');
   
   // Возвращаем функцию для очистки
   return function cleanup() {
