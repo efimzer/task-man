@@ -26,5 +26,51 @@
 
     --danger-border: #f97066;
     --danger-bg: rgba(249, 112, 102, 0.12);
+
+    /* Settings */
+    --toggle-bg: rgba(132, 139, 168, 0.3);
+    --surface-raised: rgba(49, 52, 70, 0.6);
+    --surface-hover: rgba(57, 60, 78, 0.7);
+    --primary: #5a7bff;
+    --primary-light: rgba(90, 123, 255, 0.2);
+    --error: #f97066;
   }
+}
+
+/* Manual dark mode override */
+.dark-mode {
+  color-scheme: dark;
+  --bg-primary: linear-gradient(160deg, rgba(16, 22, 45, 0.8), rgba(29, 35, 61, 0.65));
+  --glass-surface: rgba(49, 52, 70, 0.5);
+  --glass-surface-strong: rgba(44, 48, 66, 0.6);
+  --glass-border: rgba(132, 139, 168, 0.14);
+  --glass-border-strong: rgba(132, 139, 168, 0.28);
+  --shadow-soft: 0 18px 40px rgba(0, 0, 0, 0.1);
+  --shadow-strong: 0 22px 50px rgba(0, 0, 0, 0.2);
+  --folder-menu: rgba(49, 52, 70, 0.9);
+
+  --text-primary: rgba(240, 242, 250, 0.95);
+  --text-secondary: rgba(240, 242, 250, 0.7);
+  --text-muted: rgba(240, 242, 250, 0.5);
+  --text-inverse: rgba(14, 16, 22, 0.96);
+
+  --accent-primary: #5a7bff;
+  --accent-muted: rgba(90, 123, 255, 0.12);
+  --accent-neutral: rgba(57, 59, 67, 0.9);
+  --accent-neutral-strong: rgba(240, 242, 250, 0.16);
+
+  --checkbox-border: rgba(240, 242, 250, 0.28);
+  --checkbox-checked-bg: #5a7bff;
+  --checkbox-checked-color: #ffffff;
+
+  --danger-border: #f97066;
+  --danger-bg: rgba(249, 112, 102, 0.12);
+
+  /* Settings */
+  --toggle-bg: rgba(132, 139, 168, 0.3);
+  --surface-raised: rgba(49, 52, 70, 0.6);
+  --surface-hover: rgba(57, 60, 78, 0.7);
+  --primary: #5a7bff;
+  --primary-light: rgba(90, 123, 255, 0.2);
+  --error: #f97066;
 }
