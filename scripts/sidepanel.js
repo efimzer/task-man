@@ -136,9 +136,10 @@ function cleanupLocalState(activeKey) {
 }
 
 async function bootstrapAuthContext(userIdentifier) {
-  const userKey = normalizeUserKey(userIdentifier);
-  storageKey = userKey ? `${STORAGE_KEY}:${userKey}` : STORAGE_KEY;
-  cleanupLocalState(storageKey);
+  // В веб-версии не добавляем email к ключу, так как localStorage уже изолирован
+  // В расширении используем один общий ключ для всех пользователей (синхронизация через backend)
+  storageKey = STORAGE_KEY;
+  // Не делаем cleanup, так как используем один ключ
 }
 
 async function loadState() {

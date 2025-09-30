@@ -108,7 +108,7 @@ export function createSyncManager({
     const response = await fetch(url, {
       ...init,
       headers,
-      credentials: useAuthCookies ? 'include' : 'same-origin'
+      credentials: 'include'
     });
     if (response.status === 401) {
       handleUnauthorized();
