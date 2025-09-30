@@ -1,6 +1,7 @@
 import { createSyncManager } from './sync.js';
 import { syncConfig } from './sync-config.js';
 import { authStore } from './auth.js';
+import { initSwipeNavigation } from './swipe-navigation.js';
 
 const STORAGE_KEY = 'vuexyTodoState';
 const ALL_FOLDER_ID = 'all';
@@ -1939,3 +1940,6 @@ const initialScreen = state.ui.activeScreen === 'tasks' ? 'tasks' : 'folders';
 showScreen(initialScreen, { skipPersist: true });
 
 document.querySelector('.app-shell')?.classList.add('is-ready');
+
+// Инициализация свайп-навигации для PWA
+initSwipeNavigation();
