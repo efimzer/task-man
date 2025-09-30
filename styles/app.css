@@ -128,6 +128,7 @@ body {
 .folder-item {
   cursor: pointer;
   position: relative;
+  min-height: 60px;
 }
 
 .folder-item.active {
@@ -212,9 +213,9 @@ body {
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
-  padding: 0;
-  min-width: 24px;
-  min-height: 24px;
+  /* padding: 4px; */
+  min-width: 26px;
+  min-height: 26px;
   border-radius: 10px;
   transition: background 0.2s ease, color 0.2s ease;
 }
@@ -290,6 +291,8 @@ body {
   grid-template-columns: 22px minmax(0, 1fr) auto;
   box-shadow: var(--shadow-soft, 0 18px 40px rgba(82, 90, 110, 0.16));
   gap: 16px;
+  min-height: 60px;
+  transition: min-height 0.35s cubic-bezier(0.33, 1, 0.68, 1);
 }
 
 .task-item:hover {
@@ -326,6 +329,16 @@ body {
   background: var(--glass-surface-strong);
   border-style: dashed;
   border-color: var(--glass-border-strong);
+  animation: task-composer-settle 0.4s cubic-bezier(0.33, 1, 0.68, 1) forwards;
+}
+
+@keyframes task-composer-settle {
+  0% {
+    min-height: 61px;
+  }
+  100% {
+    min-height: 60px;
+  }
 }
 
 .checkbox {
@@ -459,7 +472,8 @@ body {
   font-weight: 400;
   min-width: 0;
   width: 100%;
-  padding-right: 20px;
+  padding: 3px 8px;
+  line-height: 1.45;
 }
 
 .task-remove {
@@ -488,26 +502,14 @@ body {
 }
 
 .task-inline-confirm {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  width: 24px;
-  height: 24px;
-  min-width: 24px;
-  min-height: 24px;
-  border-radius: 12px;
-  cursor: pointer;
-  font-size: 20px;
   justify-self: end;
   align-self: center;
-  padding: 0;
-  margin: 0;
-  transition: background 0.2s ease, color 0.2s ease;
+  margin-bottom: -6px;
+  margin-right: -7px;
 }
 
-.task-inline-confirm:hover {
-  background: var(--accent-neutral);
-  color: var(--text-primary);
+.task-inline-confirm .icon-plus {
+  font-size: 20px;
 }
 
 .task-item.completed {

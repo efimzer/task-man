@@ -397,6 +397,18 @@ console.log('📋 Loaded state:', {
 
 normalizeLoadedState();
 
+await settingsManager.init();
+
+if (elements.darkModeToggle) {
+  elements.darkModeToggle.checked = settingsManager.get('darkMode');
+}
+if (elements.showCounterToggle) {
+  elements.showCounterToggle.checked = settingsManager.get('showCounter');
+}
+if (elements.showArchiveToggle) {
+  elements.showArchiveToggle.checked = settingsManager.get('showArchive');
+}
+
 authStore.subscribe(({ token, user }) => {
   console.log('🔔 Auth store subscription triggered:', { token: !!token, user });
   
@@ -1168,8 +1180,9 @@ function createInlineComposer() {
 
   const confirmButton = document.createElement('button');
   confirmButton.type = 'button';
-  confirmButton.className = 'task-inline-confirm';
-  confirmButton.textContent = '＋';
+  confirmButton.className = 'icon-button primary task-inline-confirm';
+  confirmButton.setAttribute('aria-label', 'Добавить задачу');
+  confirmButton.innerHTML = '<span class="icon-plus">＋</span>';
 
   body.appendChild(input);
   item.append(checkbox, body, confirmButton);
@@ -1965,20 +1978,6 @@ const initialScreen = state.ui.activeScreen === 'tasks' ? 'tasks' : 'folders';
 showScreen(initialScreen, { skipPersist: true });
 
 document.querySelector('.app-shell')?.classList.add('is-ready');
-
-// Initialize settings
-await settingsManager.init();
-
-// Load settings into UI
-if (elements.darkModeToggle) {
-  elements.darkModeToggle.checked = settingsManager.get('darkMode');
-}
-if (elements.showCounterToggle) {
-  elements.showCounterToggle.checked = settingsManager.get('showCounter');
-}
-if (elements.showArchiveToggle) {
-  elements.showArchiveToggle.checked = settingsManager.get('showArchive');
-}
 
 // Settings handlers
 if (elements.settingsAction) {

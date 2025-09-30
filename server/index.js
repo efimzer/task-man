@@ -219,12 +219,9 @@ app.use(express.json({ limit: '1mb' }));
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 
-const authDir = join(rootDir, 'web/auth');
-app.get('/auth', (req, res) => {
-  res.sendFile(join(authDir, 'index.html'));
+app.all(['/auth', '/auth/*'], (req, res) => {
+  res.status(404).type('text/plain').send('Not found');
 });
-
-app.use('/auth', express.static(authDir));
 app.use('/web', express.static(join(rootDir, 'web')));
 app.use('/scripts', express.static(join(rootDir, 'scripts')));
 app.use('/styles', express.static(join(rootDir, 'styles')));
