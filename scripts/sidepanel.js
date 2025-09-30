@@ -2051,26 +2051,54 @@ if (elements.changePasswordButton) {
     
     try {
       const token = authStore.getToken();
-      const response = await fetch(buildAuthUrl('/api/auth/change-password'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          currentPassword,
-          newPassword
-        }),
-        credentials: shouldUseAuthCookies ? 'include' : 'omit'
-      });
+      console.log('🔑 Changing password, token:', !!token);
       
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data?.message || 'Не удалось изменить пароль');
+      // Try both possible endpoints
+      const endpoints = ['/api/auth/password', '/api/auth/change-password'];
+      let success = false;
+      let lastError = null;
+      
+      for (const endpoint of endpoints) {
+        try {
+          console.log(`📡 Trying endpoint: ${endpoint}`);
+          const response = await fetch(buildAuthUrl(endpoint), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              oldPassword: currentPassword,
+              newPassword: newPassword,
+              currentPassword: currentPassword,
+              password: newPassword
+            }),
+            credentials: shouldUseAuthCookies ? 'include' : 'omit'
+          });
+          
+          console.log(`📡 Response status: ${response.status}`);
+          
+          if (response.ok) {
+            success = true;
+            break;
+          }
+          
+          const data = await response.json().catch(() => ({}));
+          lastError = data?.message || data?.error || `HTTP ${response.status}`;
+          console.log(`❌ Error from ${endpoint}:`, lastError);
+        } catch (err) {
+          console.log(`❌ Request failed for ${endpoint}:`, err);
+          lastError = err.message;
+        }
       }
       
-      alert('Пароль успешно изменён');
+      if (success) {
+        alert('Пароль успешно изменён');
+      } else {
+        throw new Error(lastError || 'Не удалось изменить пароль');
+      }
     } catch (error) {
+      console.error('❌ Password change error:', error);
       alert(error.message || 'Ошибка при изменении пароля');
     }
   });

@@ -39,83 +39,80 @@
         </div>
       </section>
 
-      <section id="screenSettings" class="screen screen-settings">
-        <header class="screen-header">
-          <button id="backFromSettings" class="back-button" aria-label="Назад"><span class="back-icon"></span></button>
+      <section id="screenSettings" class="screen screen-settings hidden">
+        <header class="tasks-header">
+          <button id="backToFoldersFromSettings" class="back-button" aria-label="Назад к списку папок"><span class="back-icon"></span></button>
           <div class="tasks-heading">
-            <h2 id="settingsUserEmail" class="screen-title">Настройки</h2>
+            <h2 class="tasks-title">Настройки</h2>
           </div>
         </header>
-
-        <div class="settings-scroll">
-          <div class="settings-group">
-            <h3 class="settings-group-title">Внешний вид</h3>
-            
-            <div class="settings-item">
-              <div class="settings-item-content">
-                <span class="settings-item-label">Тема</span>
-                <span class="settings-item-description">Цветовая схема приложения</span>
+        <div class="tasks-scroll">
+          <div class="settings-container">
+            <div class="settings-group">
+              <h3 class="settings-group-title">Внешний вид</h3>
+              
+              <div class="settings-item">
+                <div class="settings-item-content">
+                  <span class="settings-item-label">Тёмная тема</span>
+                  <span class="settings-item-description">Переключить цветовую схему</span>
+                </div>
+                <label class="settings-toggle">
+                  <input type="checkbox" id="darkModeToggle" />
+                  <span class="settings-toggle-slider"></span>
+                </label>
               </div>
-              <select id="themeSelect" class="settings-select">
-                <option value="auto">Автоматически</option>
-                <option value="light">Светлая</option>
-                <option value="dark">Тёмная</option>
-              </select>
+
+              <div class="settings-item">
+                <div class="settings-item-content">
+                  <span class="settings-item-label">Счётчик задач</span>
+                  <span class="settings-item-description">Показывать количество задач</span>
+                </div>
+                <label class="settings-toggle">
+                  <input type="checkbox" id="showCounterToggle" checked />
+                  <span class="settings-toggle-slider"></span>
+                </label>
+              </div>
+
+              <div class="settings-item">
+                <div class="settings-item-content">
+                  <span class="settings-item-label">Показывать архив</span>
+                  <span class="settings-item-description">Папка "Архив" на главной</span>
+                </div>
+                <label class="settings-toggle">
+                  <input type="checkbox" id="showArchiveToggle" checked />
+                  <span class="settings-toggle-slider"></span>
+                </label>
+              </div>
             </div>
 
-            <div class="settings-item">
-              <div class="settings-item-content">
-                <span class="settings-item-label">Счётчик задач</span>
-                <span class="settings-item-description">Показывать количество задач</span>
-              </div>
-              <label class="settings-toggle">
-                <input type="checkbox" id="showCounterToggle" checked />
-                <span class="settings-toggle-slider"></span>
-              </label>
+            <div class="settings-group">
+              <h3 class="settings-group-title">Данные</h3>
+              
+              <button type="button" id="clearArchiveButton" class="settings-button">
+                <div class="settings-button-content">
+                  <span class="settings-button-label">Очистить архив</span>
+                  <span class="settings-button-description">Удалить все завершённые задачи</span>
+                </div>
+              </button>
             </div>
 
-            <div class="settings-item">
-              <div class="settings-item-content">
-                <span class="settings-item-label">Показывать архив</span>
-                <span class="settings-item-description">Папка "Архив" на главной</span>
-              </div>
-              <label class="settings-toggle">
-                <input type="checkbox" id="showArchiveToggle" checked />
-                <span class="settings-toggle-slider"></span>
-              </label>
+            <div class="settings-group">
+              <h3 class="settings-group-title">Аккаунт</h3>
+              
+              <button type="button" id="changePasswordButton" class="settings-button">
+                <div class="settings-button-content">
+                  <span class="settings-button-label">Сменить пароль</span>
+                  <span class="settings-button-description">Изменить пароль для входа</span>
+                </div>
+              </button>
+
+              <button type="button" id="logoutButton" class="settings-button settings-button-danger">
+                <div class="settings-button-content">
+                  <span class="settings-button-label">Выйти</span>
+                  <span class="settings-button-description">Выйти из аккаунта</span>
+                </div>
+              </button>
             </div>
-          </div>
-
-          <div class="settings-group">
-            <h3 class="settings-group-title">Данные</h3>
-            
-            <button type="button" id="clearArchiveButton" class="settings-button">
-              <span class="settings-button-icon">🗑️</span>
-              <div class="settings-button-content">
-                <span class="settings-button-label">Очистить архив</span>
-                <span class="settings-button-description">Удалить все завершённые задачи</span>
-              </div>
-            </button>
-          </div>
-
-          <div class="settings-group">
-            <h3 class="settings-group-title">Аккаунт</h3>
-            
-            <button type="button" id="changePasswordButton" class="settings-button">
-              <span class="settings-button-icon">🔒</span>
-              <div class="settings-button-content">
-                <span class="settings-button-label">Сменить пароль</span>
-                <span class="settings-button-description">Изменить пароль для входа</span>
-              </div>
-            </button>
-
-            <button type="button" id="logoutButton" class="settings-button settings-button-danger">
-              <span class="settings-button-icon">🚪</span>
-              <div class="settings-button-content">
-                <span class="settings-button-label">Выйти</span>
-                <span class="settings-button-description">Выйти из аккаунта</span>
-              </div>
-            </button>
           </div>
         </div>
       </section>
@@ -152,8 +149,8 @@
     </div>
 
     <div id="appMenu" class="folder-menu app-menu hidden" role="menu">
+      <button type="button" id="settingsAction" class="folder-menu-item">Настройки</button>
       <button type="button" id="logoutAction" class="folder-menu-item">Выйти</button>
-      <button type="button" id="clearArchiveAction" class="folder-menu-item">Очистить архив</button>
     </div>
 
     <div id="modalBackdrop" class="modal-backdrop hidden"></div>

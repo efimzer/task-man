@@ -1052,12 +1052,6 @@ body {
   transform: translateY(0);
 }
 
-.settings-button-icon {
-  font-size: 24px;
-  margin-right: 12px;
-  flex-shrink: 0;
-}
-
 .settings-button-content {
   flex: 1;
   min-width: 0;
