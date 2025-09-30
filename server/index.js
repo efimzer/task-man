@@ -310,6 +310,38 @@ app.get('/api/debug/stats', (req, res) => {
   });
 });
 
+// Детальная информация о пользователе
+app.get('/api/debug/user/:email', (req, res) => {
+  const email = normalizeEmail(req.params.email);
+  const user = data.users[email];
+  
+  if (!user) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+  
+  const state = data.states[email];
+  const userSessions = Object.entries(data.sessions)
+    .filter(([_, session]) => session.email === email)
+    .map(([token, session]) => ({
+      token: token.substring(0, 8) + '...',
+      createdAt: new Date(session.createdAt).toISOString()
+    }));
+  
+  res.json({
+    email: user.email,
+    createdAt: new Date(user.createdAt).toISOString(),
+    activeSessions: userSessions.length,
+    sessions: userSessions,
+    state: {
+      folders: state?.folders?.length || 0,
+      tasks: state?.tasks?.length || 0,
+      archivedTasks: state?.archivedTasks?.length || 0,
+      lastUpdate: state?.meta?.updatedAt ? new Date(state.meta.updatedAt).toISOString() : null
+    }
+  });
+});
+
 function validateCredentials(body) {
   const email = normalizeEmail(body?.email);
   const password = typeof body?.password === 'string' ? body.password : '';
