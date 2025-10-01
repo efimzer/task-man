@@ -3,6 +3,7 @@ import { syncConfig } from './sync-config.js';
 import { authStore } from './auth.js';
 import { initSwipeNavigation } from './swipe-navigation.js';
 import { settingsManager } from './settings.js';
+import { showLoadingIndicator, hideLoadingIndicator } from './loading-indicator.js';
 
 const STORAGE_KEY = 'vuexyTodoState';
 const ALL_FOLDER_ID = 'all';

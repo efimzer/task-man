@@ -456,11 +456,30 @@ app.put('/state', requireAuth, async (req, res) => {
   try {
     const email = req.auth.email;
     const payload = req.body?.state;
+    const expectedVersion = req.body?.expectedVersion;
     
     if (!payload || typeof payload !== 'object') {
       console.log(`[STATE UPDATE ERROR] Invalid state from ${email}`);
       res.status(400).json({ error: 'INVALID_STATE' });
       return;
+    }
+    
+    // Оптимистичная проверка конфликтов
+    if (expectedVersion !== null && expectedVersion !== undefined) {
+      const currentState = await statesCollection.findOne({ email });
+      const serverVersion = currentState?.meta?.version ?? null;
+      
+      // Если серверная версия новее ожидаемой - конфликт!
+      if (serverVersion !== null && serverVersion > expectedVersion) {
+        console.warn(`[STATE CONFLICT] ${email}: expected v${expectedVersion}, but server has v${serverVersion}`);
+        res.status(409).json({ 
+          error: 'VERSION_CONFLICT',
+          serverVersion,
+          expectedVersion,
+          message: 'Server has newer version. Pull first and retry.'
+        });
+        return;
+      }
     }
     
     console.log(`[STATE UPDATE] Updating state for ${email}, folders: ${payload.folders?.length || 0}, tasks: ${payload.tasks?.length || 0}`);
