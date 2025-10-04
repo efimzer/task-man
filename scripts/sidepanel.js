@@ -1,14 +1,29 @@
-import { createSyncManager } from './sync.js';
 import { syncConfig } from './sync-config.js';
-import { authStore } from './auth.js';
 import { initSwipeNavigation } from './swipe-navigation.js';
 import { settingsManager } from './settings.js';
 import { showLoadingIndicator, hideLoadingIndicator } from './loading-indicator.js';
+import { supabase } from './supabase-client.js';
+import { supabaseAuth } from './supabase-auth.js';
+import { supabaseSync } from './supabase-sync.js';
+import { 
+  initSupabase, 
+  setupAuthHandlers, 
+  showAuthOverlay, 
+  hideAuthOverlay,
+  subscribeToAuthChanges,
+  loadStateFromSupabase,
+  subscribeToRealtimeUpdates,
+  saveStateToSupabase,
+  logout as supabaseLogout
+} from './supabase-integration.js';
 
 const STORAGE_KEY = 'vuexyTodoState';
 const ALL_FOLDER_ID = 'all';
 const ARCHIVE_FOLDER_ID = 'archive';
 const EMPTY_STATE_TIMEOUT = 30 * 1000;
+
+// Флаг использования Supabase (переключить на false для MongoDB)
+const USE_SUPABASE = true;
 
 const hasChromeStorage = typeof chrome !== 'undefined' && chrome.storage?.local;
 let syncManager = null;
@@ -2180,6 +2195,79 @@ settingsManager.subscribe((settings) => {
     render();
   }
 });
+
+// Supabase initialization
+if (USE_SUPABASE) {
+  console.log('🚀 Starting Supabase mode...');
+  
+  // Настроить обработчики авторизации
+  setupAuthHandlers();
+  
+  // Инициализация
+  (async () => {
+    const { authenticated } = await initSupabase();
+    
+    if (authenticated) {
+      // Загрузить состояние из Supabase
+      try {
+        const loadedState = await loadStateFromSupabase(defaultState);
+        state = loadedState;
+        
+        // Подписаться на realtime обновления
+        await subscribeToRealtimeUpdates((newState) => {
+          state = newState;
+          render();
+        });
+        
+        render();
+        hideAuthOverlay();
+      } catch (error) {
+        console.error('❌ Failed to load state:', error);
+        showAuthOverlay();
+      }
+    } else {
+      showAuthOverlay();
+    }
+    
+    // Следить за изменениями auth
+    subscribeToAuthChanges(
+      async (session) => {
+        // User signed in
+        try {
+          const loadedState = await loadStateFromSupabase(defaultState);
+          state = loadedState;
+          
+          await subscribeToRealtimeUpdates((newState) => {
+            state = newState;
+            render();
+          });
+          
+          render();
+        } catch (error) {
+          console.error('❌ Failed to load state after sign in:', error);
+        }
+      },
+      () => {
+        // User signed out
+        state = defaultState();
+        render();
+      }
+    );
+  })();
+  
+  // Переопределить persistState для Supabase
+  const originalPersistState = window.persistState;
+  window.persistState = function() {
+    state.meta.version = (state.meta.version || 0) + 1;
+    state.meta.updatedAt = Date.now();
+    saveStateToSupabase(state);
+  };
+  
+  // Переопределить logout для Supabase
+  window.performLogout = async function() {
+    await supabaseLogout();
+  };
+}
 
 // Инициализация свайп-навигации для PWA
 initSwipeNavigation();
