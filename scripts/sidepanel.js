@@ -12,11 +12,14 @@ import {
 } from '../shared/state.js';
 
 const STORAGE_KEY = 'vuexyTodoState';
+const SESSION_COOKIE_NAME = 'todo_token';
 const ALL_FOLDER_ID = FOLDER_IDS.ALL;
 const ARCHIVE_FOLDER_ID = FOLDER_IDS.ARCHIVE;
 const EMPTY_STATE_TIMEOUT = 30 * 1000;
 
-const hasChromeStorage = typeof chrome !== 'undefined' && chrome.storage?.local;
+const isChromeExtension = typeof chrome !== 'undefined' && chrome?.runtime?.id;
+const hasChromeStorage = Boolean(isChromeExtension && chrome?.storage?.local);
+const shouldPersistState = false; // Храним состояние только в памяти для всех окружений
 let syncManager = null;
 let inMemoryState = null;
 let storageKey = STORAGE_KEY;
@@ -63,8 +66,6 @@ function dismissStartupLoader() {
   startupLoaderActive = false;
 }
 
-ensureStartupLoader();
-
 const shouldUseAuthCookies = (() => {
   if (typeof window === 'undefined' || !syncConfig.baseUrl) {
     return false;
@@ -76,6 +77,21 @@ const shouldUseAuthCookies = (() => {
     return false;
   }
 })();
+
+function hasSessionCookie() {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+  try {
+    return document.cookie
+      .split(';')
+      .map((part) => part.trim())
+      .some((part) => part.startsWith(`${SESSION_COOKIE_NAME}=`));
+  } catch (error) {
+    console.warn('Todo sync: unable to read document.cookie', error);
+    return false;
+  }
+}
 
 function resolveAssetPath(extensionPath, { webPath } = {}) {
   if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
@@ -144,13 +160,25 @@ function cleanupLocalState(activeKey) {
 }
 
 function purgeLegacyLocalStorage() {
-  if (hasChromeStorage) {
-    return;
-  }
   try {
     globalThis.localStorage?.removeItem(STORAGE_KEY);
   } catch (error) {
     console.warn('Todo sync: unable to purge legacy localStorage', error);
+  }
+}
+
+function purgeLegacyChromeStorage() {
+  if (!hasChromeStorage) {
+    return;
+  }
+  try {
+    chrome.storage.local.remove(STORAGE_KEY, () => {
+      if (chrome.runtime?.lastError) {
+        console.warn('Todo sync: unable to purge chrome storage', chrome.runtime.lastError);
+      }
+    });
+  } catch (error) {
+    console.warn('Todo sync: unable to purge chrome storage', error);
   }
 }
 
@@ -159,14 +187,15 @@ async function bootstrapAuthContext(userIdentifier) {
   // В расширении используем один общий ключ для всех пользователей (синхронизация через backend)
   storageKey = STORAGE_KEY;
   // Не делаем cleanup, так как используем один ключ
-  if (!hasChromeStorage) {
+  if (!shouldPersistState) {
     purgeLegacyLocalStorage();
+    purgeLegacyChromeStorage();
     inMemoryState = null;
   }
 }
 
 async function loadState() {
-  if (!hasChromeStorage) {
+  if (!shouldPersistState || !hasChromeStorage) {
     if (inMemoryState) {
       return cloneState(inMemoryState);
     }
@@ -207,15 +236,15 @@ async function saveState(state, options = {}) {
 
   const snapshot = cloneState(state);
 
-  if (hasChromeStorage) {
+  if (shouldPersistState && hasChromeStorage) {
     try {
       await chrome.storage.local.set({ [storageKey]: snapshot });
     } catch (error) {
       console.warn('Failed to persist state:', error);
     }
-  } else {
-    inMemoryState = snapshot;
   }
+
+  inMemoryState = snapshot;
 
   if (!skipRemote) {
     syncManager?.schedulePush();
@@ -366,6 +395,14 @@ console.log('🌐 Environment info:', {
 
 await authStore.init();
 const initialAuthUser = authStore.getUser();
+const initialToken = authStore.getToken();
+const initialCookie = hasSessionCookie();
+
+if (initialToken || initialCookie) {
+  ensureStartupLoader();
+} else {
+  dismissStartupLoader();
+}
 
 console.log('🔑 Auth store initialized, user:', initialAuthUser, 'token:', authStore.getToken());
 
@@ -392,8 +429,10 @@ if (elements.showArchiveToggle) {
 
 authStore.subscribe(({ token, user }) => {
   console.log('🔔 Auth store subscription triggered:', { token: !!token, user });
+  const hasCookie = hasSessionCookie();
+  const hasSession = Boolean(token) || hasCookie;
   
-  if (!token) {
+  if (!hasSession) {
     console.log('🔔 No token - stopping sync and showing auth overlay');
     stopSyncManager();
     initialSyncCompleted = false;
@@ -402,21 +441,24 @@ authStore.subscribe(({ token, user }) => {
     showAuthOverlay({ errorMessage: pendingAuthErrorMessage, prefillEmail: email });
     pendingAuthErrorMessage = '';
     pendingAuthPrefillEmail = '';
-  } else if (elements.authOverlay && !elements.authOverlay.classList.contains('hidden')) {
+  } else if (token && elements.authOverlay && !elements.authOverlay.classList.contains('hidden')) {
     console.log('🔔 Token exists and auth overlay visible - hiding overlay and starting sync');
     hideAuthOverlay();
+    ensureStartupLoader();
     void startSyncIfNeeded({ forcePull: true });
   } else if (token) {
     console.log('🔔 Token exists - starting sync');
+    ensureStartupLoader();
     void startSyncIfNeeded();
   }
 });
 
-if (authStore.getToken()) {
+if (authStore.getToken() || hasSessionCookie()) {
   console.log('✅ User is authenticated, starting sync');
   await startSyncIfNeeded({ forcePull: true });
 } else {
   console.log('❌ User not authenticated, showing auth overlay');
+  dismissStartupLoader();
   showAuthOverlay();
 }
 
@@ -484,6 +526,7 @@ function setAuthLoading(isLoading) {
 function showAuthOverlay({ errorMessage, prefillEmail } = {}) {
   console.log('🔐 showAuthOverlay called with:', { errorMessage, prefillEmail });
   console.log('🔐 elements.authOverlay exists:', !!elements.authOverlay);
+  dismissStartupLoader();
   
   // Временное решение - объявляем authMode локально
   let localAuthMode = 'login';
@@ -628,7 +671,7 @@ function stopSyncManager() {
 async function startSyncIfNeeded({ forcePull = false } = {}) {
   console.log('🔄 startSyncIfNeeded called, token:', authStore.getToken(), 'forcePull:', forcePull);
   
-  if (!authStore.getToken()) {
+  if (!authStore.getToken() && !hasSessionCookie()) {
     console.log('⚠️ No auth token, skipping sync');
     dismissStartupLoader();
     return;
