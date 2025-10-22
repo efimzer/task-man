@@ -1,8 +1,8 @@
 import { syncConfig } from './sync-config.js';
 import { cloneState } from '../shared/state.js';
 
-const DEFAULT_DEBOUNCE = 1500;
-const DEFAULT_PULL_INTERVAL = 2500;
+const DEFAULT_DEBOUNCE = 1000;
+const DEFAULT_PULL_INTERVAL = 1000;
 const MIN_POLL_INTERVAL = 500;
 
 function normalizeBaseUrl(value) {
