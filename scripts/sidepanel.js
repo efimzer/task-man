@@ -3,7 +3,7 @@ import { syncConfig } from './sync-config.js';
 import { authStore } from './auth.js';
 import { initSwipeNavigation } from './swipe-navigation.js';
 import { settingsManager } from './settings.js';
-import { showLoadingIndicator, hideLoadingIndicator } from './loading-indicator.js';
+import { showLoadingIndicator, hideLoadingIndicator, showStartupLoader, hideStartupLoader } from './loading-indicator.js';
 import {
   createDefaultState,
   normalizeState,
@@ -36,6 +36,7 @@ let emptyStateTimerFolderId = null;
 let emptyStateExpired = false;
 let manualSyncInFlight = false;
 let state = null;
+let startupLoaderActive = false;
 
 const folderMenuState = {
   visible: false,
@@ -46,6 +47,23 @@ const appMenuState = {
   visible: false,
   anchor: null
 };
+
+function ensureStartupLoader() {
+  if (!startupLoaderActive) {
+    showStartupLoader();
+    startupLoaderActive = true;
+  }
+}
+
+function dismissStartupLoader() {
+  if (!startupLoaderActive) {
+    return;
+  }
+  hideStartupLoader();
+  startupLoaderActive = false;
+}
+
+ensureStartupLoader();
 
 const shouldUseAuthCookies = (() => {
   if (typeof window === 'undefined' || !syncConfig.baseUrl) {
@@ -379,6 +397,7 @@ authStore.subscribe(({ token, user }) => {
     console.log('🔔 No token - stopping sync and showing auth overlay');
     stopSyncManager();
     initialSyncCompleted = false;
+    dismissStartupLoader();
     const email = pendingAuthPrefillEmail || user?.email || elements.authEmail?.value || '';
     showAuthOverlay({ errorMessage: pendingAuthErrorMessage, prefillEmail: email });
     pendingAuthErrorMessage = '';
@@ -587,6 +606,7 @@ async function authRequest(path, payload) {
 }
 
 async function switchActiveUserSession(user) {
+  ensureStartupLoader();
   const email = user?.email ?? null;
   await bootstrapAuthContext(email);
   state = await loadState();
@@ -606,6 +626,7 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
   
   if (!authStore.getToken()) {
     console.log('⚠️ No auth token, skipping sync');
+    dismissStartupLoader();
     return;
   }
   if (!syncManager) {
@@ -621,6 +642,7 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
   }
   if (!syncManager.enabled) {
     console.log('⚠️ Sync manager is disabled');
+    dismissStartupLoader();
     return;
   }
   if (!syncBootstrapInFlight) {
@@ -652,10 +674,15 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
     } finally {
       syncBootstrapInFlight = false;
       updateSyncStatusLabel({ syncing: manualSyncInFlight });
+      dismissStartupLoader();
     }
   }
   if (typeof syncManager.startPolling === 'function') {
     syncManager.startPolling();
+  }
+
+  if (!syncBootstrapInFlight && !manualSyncInFlight) {
+    dismissStartupLoader();
   }
 }
 
