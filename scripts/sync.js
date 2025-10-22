@@ -1,4 +1,5 @@
 import { syncConfig } from './sync-config.js';
+import { cloneState } from '../shared/state.js';
 
 const DEFAULT_DEBOUNCE = 1500;
 const DEFAULT_PULL_INTERVAL = 2500;
@@ -9,10 +10,6 @@ function normalizeBaseUrl(value) {
     return '';
   }
   return value.replace(/\/?$/, '');
-}
-
-function cloneState(state) {
-  return JSON.parse(JSON.stringify(state));
 }
 
 function buildHeaders({ token } = {}) {

@@ -4,10 +4,16 @@ import { authStore } from './auth.js';
 import { initSwipeNavigation } from './swipe-navigation.js';
 import { settingsManager } from './settings.js';
 import { showLoadingIndicator, hideLoadingIndicator } from './loading-indicator.js';
+import {
+  createDefaultState,
+  normalizeState,
+  cloneState,
+  FOLDER_IDS
+} from '../shared/state.js';
 
 const STORAGE_KEY = 'vuexyTodoState';
-const ALL_FOLDER_ID = 'all';
-const ARCHIVE_FOLDER_ID = 'archive';
+const ALL_FOLDER_ID = FOLDER_IDS.ALL;
+const ARCHIVE_FOLDER_ID = FOLDER_IDS.ARCHIVE;
 const EMPTY_STATE_TIMEOUT = 30 * 1000;
 
 const hasChromeStorage = typeof chrome !== 'undefined' && chrome.storage?.local;
@@ -74,34 +80,12 @@ function buildApiUrl(path) {
   }
 }
 
-const defaultState = () => ({
-  meta: {
-    version: 0,
-    updatedAt: Date.now(),
-    emptyStateTimestamps: {}
-  },
-  folders: [
-    { id: ALL_FOLDER_ID, name: 'Все' },
-    { id: 'inbox', name: 'Основные' },
-    { id: 'personal', name: 'Личное' },
-    { id: ARCHIVE_FOLDER_ID, name: 'Архив' }
-  ],
-  tasks: [],
-  archivedTasks: [],
-  ui: {
-    selectedFolderId: 'inbox',
-    activeScreen: 'folders'
-  }
-});
-
 const uid = () => {
   if (globalThis.crypto?.randomUUID) {
     return crypto.randomUUID();
   }
   return `id-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
 };
-
-const safeClone = (value) => JSON.parse(JSON.stringify(value));
 
 const normalizeUserKey = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
 
@@ -150,12 +134,12 @@ async function loadState() {
     try {
       const raw = globalThis.localStorage?.getItem(storageKey);
       if (!raw) {
-        return defaultState();
+        return createDefaultState();
       }
       return normalizeState(JSON.parse(raw));
     } catch (error) {
       console.warn('Failed to load state from localStorage:', error);
-      return defaultState();
+      return createDefaultState();
     }
   }
 
@@ -163,54 +147,13 @@ async function loadState() {
     const stored = await chrome.storage.local.get(storageKey);
     const raw = stored?.[storageKey];
     if (!raw) {
-      return defaultState();
+      return createDefaultState();
     }
     return normalizeState(raw);
   } catch (error) {
     console.warn('Failed to load saved state:', error);
-    return defaultState();
+    return createDefaultState();
   }
-}
-
-function normalizeState(rawState) {
-  const base = defaultState();
-  const merged = {
-    folders: Array.isArray(rawState.folders) && rawState.folders.length ? rawState.folders : base.folders,
-    tasks: Array.isArray(rawState.tasks) ? rawState.tasks : base.tasks,
-    archivedTasks: Array.isArray(rawState.archivedTasks) ? rawState.archivedTasks : base.archivedTasks,
-    ui: {
-      ...base.ui,
-      ...(typeof rawState.ui === 'object' ? rawState.ui : {})
-    },
-    meta: {
-      ...base.meta,
-      ...(typeof rawState.meta === 'object' ? rawState.meta : {})
-    }
-  };
-
-  if (!Array.isArray(merged.meta)) {
-    merged.meta.emptyStateTimestamps = merged.meta.emptyStateTimestamps ?? {};
-  }
-
-  if (merged.ui.activeScreen !== 'tasks' && merged.ui.activeScreen !== 'folders') {
-    merged.ui.activeScreen = base.ui.activeScreen;
-  }
-
-  merged.meta.version = Number.isFinite(merged.meta.version)
-    ? merged.meta.version
-    : parseInt(merged.meta.version ?? base.meta.version, 10) || base.meta.version;
-
-  const rawUpdatedAt = merged.meta.updatedAt;
-  if (Number.isFinite(rawUpdatedAt)) {
-    merged.meta.updatedAt = rawUpdatedAt;
-  } else if (typeof rawUpdatedAt === 'string') {
-    const parsed = Date.parse(rawUpdatedAt);
-    merged.meta.updatedAt = Number.isFinite(parsed) ? parsed : base.meta.updatedAt;
-  } else {
-    merged.meta.updatedAt = base.meta.updatedAt;
-  }
-
-  return merged;
 }
 
 async function saveState(state, options = {}) {
@@ -232,7 +175,7 @@ async function saveState(state, options = {}) {
     state.meta.emptyStateTimestamps = {};
   }
 
-  const snapshot = safeClone(state);
+  const snapshot = cloneState(state);
 
   if (hasChromeStorage) {
     try {
@@ -667,7 +610,7 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
         console.log('📥 Force pulling initial state from server');
         const initialResult = await syncManager.pullInitial();
         if (initialResult?.notFound) {
-          const fresh = defaultState();
+          const fresh = createDefaultState();
           state.folders = fresh.folders;
           state.tasks = fresh.tasks;
           state.archivedTasks = fresh.archivedTasks;
