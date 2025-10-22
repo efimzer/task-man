@@ -18,6 +18,7 @@ const EMPTY_STATE_TIMEOUT = 30 * 1000;
 
 const hasChromeStorage = typeof chrome !== 'undefined' && chrome.storage?.local;
 let syncManager = null;
+let inMemoryState = null;
 let storageKey = STORAGE_KEY;
 let authMode = 'login'; // Переместили сюда
 let pendingAuthErrorMessage = '';
@@ -33,6 +34,8 @@ let syncBootstrapInFlight = false;
 let emptyStateTimer = null;
 let emptyStateTimerFolderId = null;
 let emptyStateExpired = false;
+let manualSyncInFlight = false;
+let state = null;
 
 const folderMenuState = {
   visible: false,
@@ -122,25 +125,34 @@ function cleanupLocalState(activeKey) {
   }
 }
 
+function purgeLegacyLocalStorage() {
+  if (hasChromeStorage) {
+    return;
+  }
+  try {
+    globalThis.localStorage?.removeItem(STORAGE_KEY);
+  } catch (error) {
+    console.warn('Todo sync: unable to purge legacy localStorage', error);
+  }
+}
+
 async function bootstrapAuthContext(userIdentifier) {
   // В веб-версии не добавляем email к ключу, так как localStorage уже изолирован
   // В расширении используем один общий ключ для всех пользователей (синхронизация через backend)
   storageKey = STORAGE_KEY;
   // Не делаем cleanup, так как используем один ключ
+  if (!hasChromeStorage) {
+    purgeLegacyLocalStorage();
+    inMemoryState = null;
+  }
 }
 
 async function loadState() {
   if (!hasChromeStorage) {
-    try {
-      const raw = globalThis.localStorage?.getItem(storageKey);
-      if (!raw) {
-        return createDefaultState();
-      }
-      return normalizeState(JSON.parse(raw));
-    } catch (error) {
-      console.warn('Failed to load state from localStorage:', error);
-      return createDefaultState();
+    if (inMemoryState) {
+      return cloneState(inMemoryState);
     }
+    return createDefaultState();
   }
 
   try {
@@ -183,12 +195,8 @@ async function saveState(state, options = {}) {
     } catch (error) {
       console.warn('Failed to persist state:', error);
     }
-  } else if (globalThis.localStorage) {
-    try {
-      globalThis.localStorage.setItem(storageKey, JSON.stringify(snapshot));
-    } catch (error) {
-      console.warn('Failed to persist state to localStorage:', error);
-    }
+  } else {
+    inMemoryState = snapshot;
   }
 
   if (!skipRemote) {
@@ -259,6 +267,17 @@ function applyRemoteState(remoteState) {
   render();
 }
 
+function updateSyncStatusLabel({ syncing = false } = {}) {
+  if (!elements.syncStatusLabel) {
+    return;
+  }
+  const version = Number.isFinite(state?.meta?.version) ? state.meta.version : 0;
+  elements.syncStatusLabel.textContent = `Синхронизация (${version})`;
+  if (elements.syncNowButton) {
+    elements.syncNowButton.disabled = syncing;
+  }
+}
+
 const elements = {
   screenFolders: document.getElementById('screenFolders'),
   screenTasks: document.getElementById('screenTasks'),
@@ -298,7 +317,9 @@ const elements = {
   showArchiveToggle: document.getElementById('showArchiveToggle'),
   clearArchiveButton: document.getElementById('clearArchiveButton'),
   changePasswordButton: document.getElementById('changePasswordButton'),
-  logoutButton: document.getElementById('logoutButton')
+  logoutButton: document.getElementById('logoutButton'),
+  syncNowButton: document.getElementById('syncNowButton'),
+  syncStatusLabel: document.getElementById('syncStatusLabel')
 };
 
 console.log('🗨️ Elements initialized:', {
@@ -332,7 +353,7 @@ console.log('🔑 Auth store initialized, user:', initialAuthUser, 'token:', aut
 
 await bootstrapAuthContext(initialAuthUser?.email);
 
-let state = await loadState();
+state = await loadState();
 console.log('📋 Loaded state:', {
   folders: state.folders?.length,
   tasks: state.tasks?.length,
@@ -604,6 +625,7 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
   }
   if (!syncBootstrapInFlight) {
     syncBootstrapInFlight = true;
+    updateSyncStatusLabel({ syncing: true });
     try {
       // Если forcePull=true - всегда делаем pull, независимо от initialSyncCompleted
       if (forcePull || (!initialSyncCompleted && syncConfig.pullOnStartup !== false)) {
@@ -629,10 +651,41 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
       console.warn('Todo sync: initial sync failed', error);
     } finally {
       syncBootstrapInFlight = false;
+      updateSyncStatusLabel({ syncing: manualSyncInFlight });
     }
   }
   if (typeof syncManager.startPolling === 'function') {
     syncManager.startPolling();
+  }
+}
+
+async function handleManualSyncClick() {
+  if (manualSyncInFlight) {
+    return;
+  }
+  manualSyncInFlight = true;
+  updateSyncStatusLabel({ syncing: true });
+
+  let indicatorVisible = false;
+  try {
+    showLoadingIndicator();
+    indicatorVisible = true;
+
+    await startSyncIfNeeded();
+
+    if (syncManager?.enabled) {
+      await syncManager.forcePush();
+      await syncManager.pullLatest({ skipIfUnchanged: false });
+    }
+  } catch (error) {
+    console.warn('Todo sync: manual sync failed', error);
+    alert('Не удалось обновить данные. Проверьте соединение и попробуйте ещё раз.');
+  } finally {
+    if (indicatorVisible) {
+      hideLoadingIndicator();
+    }
+    manualSyncInFlight = false;
+    updateSyncStatusLabel({ syncing: syncBootstrapInFlight });
   }
 }
 
@@ -1933,6 +1986,7 @@ function render() {
   renderFolders();
   renderTasks();
   updateFloatingAction();
+  updateSyncStatusLabel({ syncing: manualSyncInFlight });
 }
 
 render();
@@ -2080,6 +2134,12 @@ if (elements.logoutButton) {
       await performLogout();
       hideSettingsScreen();
     }
+  });
+}
+
+if (elements.syncNowButton) {
+  elements.syncNowButton.addEventListener('click', () => {
+    void handleManualSyncClick();
   });
 }
 
