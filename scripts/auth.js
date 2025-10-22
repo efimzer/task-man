@@ -2,6 +2,7 @@ const STORAGE_TOKEN_KEY = 'todoAuthToken';
 const STORAGE_USER_KEY = 'todoAuthUser';
 const COOKIE_URL = 'https://task-man-rf22.onrender.com';
 const TOKEN_COOKIE_NAME = 'todo_token'; // Исправлено: было 'token', должно быть 'todo_token'
+const BROWSER_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 дней
 
 const isChromeExtension = typeof chrome !== 'undefined' && chrome.storage?.local;
 const hasCookieAPI = typeof chrome !== 'undefined' && chrome.cookies;
@@ -107,6 +108,80 @@ async function getTokenFromCookie() {
   }
 }
 
+function setBrowserCookie(name, value, { maxAge = BROWSER_COOKIE_MAX_AGE } = {}) {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  try {
+    const encoded = encodeURIComponent(value);
+    document.cookie = `${name}=${encoded}; max-age=${maxAge}; path=/; SameSite=Lax`;
+  } catch (error) {
+    console.warn('Auth store: unable to set browser cookie', error);
+  }
+}
+
+function deleteBrowserCookie(name) {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  try {
+    document.cookie = `${name}=; max-age=0; path=/; SameSite=Lax`;
+  } catch (error) {
+    console.warn('Auth store: unable to delete browser cookie', error);
+  }
+}
+
+function readBrowserCookie(name) {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  try {
+    return document.cookie
+      .split(';')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => part.split('='))
+      .find(([key]) => key === name)?.[1] || null;
+  } catch (error) {
+    console.warn('Auth store: unable to read browser cookie', error);
+    return null;
+  }
+}
+
+async function setExtensionCookie(value) {
+  if (!hasCookieAPI) {
+    return;
+  }
+  try {
+    const expirationDate = Math.floor(Date.now() / 1000) + BROWSER_COOKIE_MAX_AGE;
+    await chrome.cookies.set({
+      url: COOKIE_URL,
+      name: TOKEN_COOKIE_NAME,
+      value,
+      path: '/',
+      secure: true,
+      sameSite: 'no_restriction',
+      expirationDate
+    });
+  } catch (error) {
+    console.warn('Auth store: unable to set extension cookie', error);
+  }
+}
+
+async function deleteExtensionCookie() {
+  if (!hasCookieAPI) {
+    return;
+  }
+  try {
+    await chrome.cookies.remove({
+      url: COOKIE_URL,
+      name: TOKEN_COOKIE_NAME
+    });
+  } catch (error) {
+    console.warn('Auth store: unable to delete extension cookie', error);
+  }
+}
+
 async function loadFromStorage() {
   console.log('📋 AuthStore: loadFromStorage() called, isChromeExtension:', isChromeExtension);
   
@@ -136,6 +211,13 @@ async function loadFromStorage() {
   // В веб-версии: используем только localStorage
   currentToken = readLocalStorage(STORAGE_TOKEN_KEY);
   const rawUser = readLocalStorage(STORAGE_USER_KEY);
+  if (!currentToken) {
+    const cookieToken = readBrowserCookie(TOKEN_COOKIE_NAME);
+    if (cookieToken) {
+      currentToken = decodeURIComponent(cookieToken);
+      console.log('📋 AuthStore: recovered token from browser cookie');
+    }
+  }
   console.log('📋 AuthStore: localStorage data - token:', !!currentToken, 'rawUser:', rawUser);
   currentUser = rawUser ? normalizeUser(JSON.parse(rawUser)) : null;
 }
@@ -150,14 +232,22 @@ async function persistToStorage() {
     } else {
       await removeChromeStorage([STORAGE_TOKEN_KEY, STORAGE_USER_KEY]);
     }
+
+    if (currentToken) {
+      await setExtensionCookie(currentToken);
+    } else {
+      await deleteExtensionCookie();
+    }
     return;
   }
   
   // В веб-версии: сохраняем И token И user в localStorage
   if (currentToken) {
     writeLocalStorage(STORAGE_TOKEN_KEY, currentToken);
+    setBrowserCookie(TOKEN_COOKIE_NAME, currentToken);
   } else {
     writeLocalStorage(STORAGE_TOKEN_KEY, null);
+    deleteBrowserCookie(TOKEN_COOKIE_NAME);
   }
   
   if (currentUser) {
