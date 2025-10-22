@@ -3,5 +3,5 @@ export const syncConfig = {
   baseUrl: 'https://task-man-rf22.onrender.com',
   pullOnStartup: true,
   pushDebounceMs: 500,
-  pullIntervalMs: 2000
+  pullIntervalMs: 1500
 };

@@ -23,3 +23,25 @@ export function hideLoadingIndicator() {
     setTimeout(() => loader.remove(), 300);
   }
 }
+
+export function showStartupLoader() {
+  if (document.getElementById('startup-loader')) {
+    return;
+  }
+  const container = document.createElement('div');
+  container.id = 'startup-loader';
+  container.innerHTML = `
+    <div class="startup-loader__backdrop"></div>
+    <div class="startup-loader__spinner" aria-label="Загрузка" role="status"></div>
+  `;
+  document.body.appendChild(container);
+}
+
+export function hideStartupLoader() {
+  const container = document.getElementById('startup-loader');
+  if (!container) {
+    return;
+  }
+  container.classList.add('startup-loader--fade');
+  setTimeout(() => container.remove(), 200);
+}
