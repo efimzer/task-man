@@ -606,7 +606,11 @@ async function authRequest(path, payload) {
 }
 
 async function switchActiveUserSession(user) {
-  ensureStartupLoader();
+  if (user) {
+    ensureStartupLoader();
+  } else {
+    dismissStartupLoader();
+  }
   const email = user?.email ?? null;
   await bootstrapAuthContext(email);
   state = await loadState();
