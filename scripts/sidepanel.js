@@ -935,6 +935,26 @@ function shouldShowSuccessIllustration(folderId) {
   return folderHasTaskHistory(folderId);
 }
 
+function triggerTasksScreenAnimation({ reverse = false } = {}) {
+  const target = elements.screenTasks;
+  if (!target) {
+    return;
+  }
+  target.classList.remove('screen-enter');
+  target.classList.remove('screen-enter-reverse');
+  void target.offsetWidth;
+  if (reverse) {
+    target.classList.add('screen-enter-reverse');
+  }
+  requestAnimationFrame(() => {
+    target.classList.add('screen-enter');
+    target.addEventListener('animationend', () => {
+      target.classList.remove('screen-enter');
+      target.classList.remove('screen-enter-reverse');
+    }, { once: true });
+  });
+}
+
 function getScrollPosition() {
   if (typeof document !== 'undefined' && document.scrollingElement) {
     return document.scrollingElement.scrollTop;
@@ -2654,16 +2674,24 @@ function selectFolder(folderId, { openTasks = false, skipPersist = false } = {})
   if (!state.folders.some((folder) => folder.id === folderId)) {
     return;
   }
+
+  const previousFolderId = state.ui.selectedFolderId;
+  const wasTasksScreen = currentScreen === 'tasks';
+  const willAnimateWithinTasks = wasTasksScreen && previousFolderId !== folderId;
+  const movingDeeper = willAnimateWithinTasks && previousFolderId ? isDescendantFolder(folderId, previousFolderId) : false;
+  const movingUp = willAnimateWithinTasks && previousFolderId ? isDescendantFolder(previousFolderId, folderId) : false;
+  const useReverseAnimation = willAnimateWithinTasks && movingUp && !movingDeeper;
+
   state.ui.selectedFolderId = folderId;
   expandAncestors(folderId);
 
-  const trackFolderContext = openTasks || currentScreen === 'tasks';
+  const trackFolderContext = openTasks || wasTasksScreen;
   if (trackFolderContext) {
     pendingRestoredContext = null;
     uiContext.lastOpenedFolderId = folderId ?? null;
     uiContext.lastScreen = 'tasks';
     updateNavigationHistory(folderId ?? null);
-    if (uiContextReady && !openTasks && currentScreen === 'tasks') {
+    if (uiContextReady && !openTasks && wasTasksScreen) {
       void persistUiContext();
     }
   }
@@ -2672,10 +2700,13 @@ function selectFolder(folderId, { openTasks = false, skipPersist = false } = {})
     persistState();
   }
   render();
+  if (willAnimateWithinTasks) {
+    triggerTasksScreenAnimation({ reverse: useReverseAnimation });
+  }
   if (openTasks) {
     showScreen('tasks');
     renderTasksHeader(folderId);
-  } else if (trackFolderContext && currentScreen === 'tasks') {
+  } else if (trackFolderContext && wasTasksScreen) {
     updateUiContextForScreen('tasks');
     renderTasksHeader(state.ui.selectedFolderId);
   }
@@ -3044,7 +3075,12 @@ function beginTaskEdit(titleNode) {
 
   const handleBlur = () => finish(true);
   const handleKey = (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    const key = typeof event.key === 'string' ? event.key.toLowerCase() : event.key;
+    if (key === 'enter') {
+      if (event.shiftKey) {
+        requestAnimationFrame(autoResize);
+        return;
+      }
       event.preventDefault();
       finish(true);
     } else if (event.key === 'Escape') {
