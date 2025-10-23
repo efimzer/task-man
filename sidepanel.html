@@ -15,6 +15,12 @@
   </head>
   <body>
     <div class="app-shell">
+      <div id="pullToRefresh" class="pull-refresh" aria-hidden="true">
+        <div class="pull-refresh-indicator">
+          <span class="pull-refresh-spinner"></span>
+          <span class="pull-refresh-label" id="pullToRefreshLabel">Потяните, чтобы синхронизировать</span>
+        </div>
+      </div>
       <section id="screenFolders" class="screen screen-folders">
         <header class="screen-header">
           <h1 class="screen-title">To Do</h1>
@@ -98,9 +104,9 @@
             <div class="settings-group">
               <h3 class="settings-group-title">Данные</h3>
               
-              <button type="button" id="syncNowButton" class="settings-button">
+              <button type="button" id="syncNowButton" class="settings-button settings-button-sync">
                 <div class="settings-button-content">
-                  <span class="settings-button-label" id="syncStatusLabel">Синхронизация (0)</span>
+                  <span class="settings-button-label" id="syncStatusLabel">Синхронизация</span>
                   <span class="settings-button-description">Принудительно обновить состояние</span>
                 </div>
               </button>
