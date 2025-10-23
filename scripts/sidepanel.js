@@ -23,12 +23,29 @@ const shouldPersistState = false; // Храним состояние тольк�
 const FAB_LONG_PRESS_THRESHOLD = 500;
 const UI_CONTEXT_STORAGE_KEY = 'todoUiContext';
 const UI_CONTEXT_VERSION = 1;
+const PULL_REFRESH_THRESHOLD = 90;
+const PULL_REFRESH_MAX = 160;
+const PULL_REFRESH_RESET_DELAY = 500;
+const PULL_REFRESH_DEFAULT_TEXT = 'Потяните, чтобы синхронизировать';
+const PULL_REFRESH_READY_TEXT = 'Отпустите, чтобы синхронизировать';
+const PULL_REFRESH_SYNCING_TEXT = 'Синхронизация...';
+const PULL_REFRESH_DONE_TEXT = 'Синхронизировано';
+const PULL_REFRESH_ERROR_TEXT = 'Ошибка синхронизации';
 
 let uiContext = createDefaultUiContext();
 let uiContextReady = false;
 let uiContextProfileKey = 'anonymous';
 let uiContextStorageSnapshot = null;
 let navigationHistory = [];
+const pullToRefreshState = {
+  active: false,
+  pulling: false,
+  ready: false,
+  syncing: false,
+  startX: 0,
+  startY: 0,
+  currentOffset: 0
+};
 let pendingRestoredContext = null;
 let syncManager = null;
 let inMemoryState = null;
@@ -918,6 +935,232 @@ function shouldShowSuccessIllustration(folderId) {
   return folderHasTaskHistory(folderId);
 }
 
+function getScrollPosition() {
+  if (typeof document !== 'undefined' && document.scrollingElement) {
+    return document.scrollingElement.scrollTop;
+  }
+  if (typeof window !== 'undefined') {
+    return window.scrollY ?? 0;
+  }
+  return 0;
+}
+
+function updatePullToRefreshLabel(text) {
+  if (elements.pullToRefreshLabel) {
+    elements.pullToRefreshLabel.textContent = text;
+  }
+}
+
+function setPullToRefreshOffset(value) {
+  const offset = Math.max(0, Math.min(PULL_REFRESH_MAX, value));
+  pullToRefreshState.currentOffset = offset;
+  if (elements.pullToRefresh) {
+    elements.pullToRefresh.style.setProperty('--pull-offset', `${offset}px`);
+  }
+  if (!pullToRefreshState.syncing && elements.pullToRefreshSpinner) {
+    const progress = Math.min(1, offset / PULL_REFRESH_THRESHOLD);
+    elements.pullToRefreshSpinner.style.transform = `rotate(${progress * 240}deg)`;
+  }
+}
+
+function setPullToRefreshReady(isReady) {
+  if (!elements.pullToRefresh) {
+    return;
+  }
+  pullToRefreshState.ready = isReady;
+  elements.pullToRefresh.classList.toggle('is-ready', Boolean(isReady));
+  if (!pullToRefreshState.syncing) {
+    updatePullToRefreshLabel(isReady ? PULL_REFRESH_READY_TEXT : PULL_REFRESH_DEFAULT_TEXT);
+  }
+}
+
+function showPullToRefreshIndicator() {
+  if (!elements.pullToRefresh) {
+    return;
+  }
+  elements.pullToRefresh.classList.add('is-visible');
+  elements.pullToRefresh.classList.remove('is-complete', 'is-error');
+  elements.pullToRefresh.setAttribute('aria-hidden', 'false');
+  updatePullToRefreshLabel(PULL_REFRESH_DEFAULT_TEXT);
+}
+
+function resetPullToRefresh({ immediate = false } = {}) {
+  pullToRefreshState.active = false;
+  pullToRefreshState.pulling = false;
+  pullToRefreshState.ready = false;
+  pullToRefreshState.startX = 0;
+  pullToRefreshState.startY = 0;
+  if (!pullToRefreshState.syncing) {
+    elements.pullToRefresh?.classList.remove('is-syncing');
+  }
+  pullToRefreshState.syncing = false;
+  const indicator = elements.pullToRefresh;
+  updatePullToRefreshLabel(PULL_REFRESH_DEFAULT_TEXT);
+  setPullToRefreshOffset(0);
+  if (elements.pullToRefreshSpinner) {
+    elements.pullToRefreshSpinner.style.transform = 'rotate(0deg)';
+  }
+  if (!indicator) {
+    return;
+  }
+  indicator.classList.remove('is-visible', 'is-ready', 'is-complete', 'is-error', 'is-hiding');
+  if (!immediate) {
+    indicator.classList.add('is-hiding');
+    requestAnimationFrame(() => {
+      indicator.classList.remove('is-hiding');
+    });
+  }
+  indicator.setAttribute('aria-hidden', 'true');
+}
+
+function beginPullToRefreshSync() {
+  if (!elements.pullToRefresh) {
+    return;
+  }
+  pullToRefreshState.syncing = true;
+  elements.pullToRefresh.classList.add('is-syncing', 'is-visible');
+  elements.pullToRefresh.classList.remove('is-ready');
+  elements.pullToRefresh.setAttribute('aria-hidden', 'false');
+  updatePullToRefreshLabel(PULL_REFRESH_SYNCING_TEXT);
+  setPullToRefreshOffset(PULL_REFRESH_THRESHOLD);
+  if (elements.pullToRefreshSpinner) {
+    elements.pullToRefreshSpinner.style.transform = '';
+  }
+}
+
+function completePullToRefresh({ success }) {
+  if (!elements.pullToRefresh) {
+    return;
+  }
+  pullToRefreshState.syncing = false;
+  elements.pullToRefresh.classList.remove('is-syncing', 'is-ready');
+  if (success) {
+    elements.pullToRefresh.classList.add('is-complete');
+    updatePullToRefreshLabel(PULL_REFRESH_DONE_TEXT);
+  } else {
+    elements.pullToRefresh.classList.add('is-error');
+    updatePullToRefreshLabel(PULL_REFRESH_ERROR_TEXT);
+  }
+  setPullToRefreshOffset(success ? PULL_REFRESH_THRESHOLD * 0.7 : 0);
+  setTimeout(() => {
+    resetPullToRefresh({ immediate: false });
+  }, success ? PULL_REFRESH_RESET_DELAY : PULL_REFRESH_RESET_DELAY * 2);
+}
+
+function canStartPullToRefresh() {
+  if (!elements.pullToRefresh) {
+    return false;
+  }
+  if (pullToRefreshState.syncing || manualSyncInFlight || syncBootstrapInFlight) {
+    return false;
+  }
+  if (currentScreen !== 'folders') {
+    return false;
+  }
+  return getScrollPosition() <= 0;
+}
+
+function getTouchY(event) {
+  if (event.touches && event.touches.length) {
+    return event.touches[0].clientY;
+  }
+  if (event.changedTouches && event.changedTouches.length) {
+    return event.changedTouches[0].clientY;
+  }
+  return event.clientY ?? 0;
+}
+
+function getTouchX(event) {
+  if (event.touches && event.touches.length) {
+    return event.touches[0].clientX;
+  }
+  if (event.changedTouches && event.changedTouches.length) {
+    return event.changedTouches[0].clientX;
+  }
+  return event.clientX ?? 0;
+}
+
+function handlePullStart(event) {
+  if (!canStartPullToRefresh()) {
+    pullToRefreshState.active = false;
+    resetPullToRefresh({ immediate: true });
+    return;
+  }
+  if (event.touches && event.touches.length > 1) {
+    pullToRefreshState.active = false;
+    return;
+  }
+  pullToRefreshState.active = true;
+  pullToRefreshState.pulling = false;
+  pullToRefreshState.ready = false;
+  pullToRefreshState.startX = getTouchX(event);
+  pullToRefreshState.startY = getTouchY(event);
+  setPullToRefreshOffset(0);
+  if (elements.pullToRefreshSpinner) {
+    elements.pullToRefreshSpinner.style.transform = 'rotate(0deg)';
+  }
+}
+
+function handlePullMove(event) {
+  if (!pullToRefreshState.active) {
+    return;
+  }
+
+  const currentY = getTouchY(event);
+  const currentX = getTouchX(event);
+  const deltaY = currentY - pullToRefreshState.startY;
+  const deltaX = Math.abs(currentX - pullToRefreshState.startX);
+
+  if (!pullToRefreshState.pulling) {
+    if (deltaY > 0 && deltaY > deltaX) {
+      pullToRefreshState.pulling = true;
+      showPullToRefreshIndicator();
+    } else if (deltaY < 0) {
+      pullToRefreshState.active = false;
+      return;
+    }
+  }
+
+  if (!pullToRefreshState.pulling) {
+    return;
+  }
+
+  if (deltaY <= 0) {
+    setPullToRefreshOffset(0);
+    setPullToRefreshReady(false);
+    return;
+  }
+
+  const damped = deltaY * 0.65;
+  const offset = Math.min(PULL_REFRESH_MAX, damped);
+  setPullToRefreshOffset(offset);
+  setPullToRefreshReady(offset >= PULL_REFRESH_THRESHOLD);
+
+  if (deltaY > 0 && Math.abs(deltaY) > Math.abs(deltaX)) {
+    event.preventDefault();
+  }
+}
+
+function handlePullEnd(event) {
+  if (!pullToRefreshState.active) {
+    return;
+  }
+
+  const shouldTrigger = pullToRefreshState.pulling && pullToRefreshState.ready && !pullToRefreshState.syncing;
+
+  pullToRefreshState.active = false;
+
+  if (shouldTrigger) {
+    if (!manualSyncInFlight) {
+      void handleManualSyncClick({ source: 'pull' });
+    } else {
+      resetPullToRefresh({ immediate: true });
+    }
+  } else {
+    resetPullToRefresh({ immediate: true });
+  }
+}
+
 function buildBreadcrumbSegments(folderId) {
   const segments = [];
   let current = folderId;
@@ -1182,13 +1425,18 @@ function applyRemoteState(remoteState) {
 }
 
 function updateSyncStatusLabel({ syncing = false } = {}) {
-  if (!elements.syncStatusLabel) {
-    return;
-  }
+  const isSyncing = Boolean(syncing);
   const version = Number.isFinite(state?.meta?.version) ? state.meta.version : 0;
-  elements.syncStatusLabel.textContent = `Синхронизация (${version})`;
+  if (elements.syncStatusLabel) {
+    elements.syncStatusLabel.textContent = 'Синхронизация';
+    elements.syncStatusLabel.dataset.version = String(version);
+    elements.syncStatusLabel.title = `Версия ${version}`;
+    elements.syncStatusLabel.setAttribute('aria-label', `Синхронизация, версия ${version}`);
+  }
   if (elements.syncNowButton) {
-    elements.syncNowButton.disabled = syncing;
+    elements.syncNowButton.disabled = isSyncing;
+    elements.syncNowButton.classList.toggle('is-syncing', isSyncing);
+    elements.syncNowButton.setAttribute('aria-busy', String(isSyncing));
   }
 }
 
@@ -1213,6 +1461,9 @@ const elements = {
   logoutAction: document.getElementById('logoutAction'),
   clearArchiveAction: document.getElementById('clearArchiveAction'),
   floatingActionButton: document.getElementById('floatingActionButton'),
+  pullToRefresh: document.getElementById('pullToRefresh'),
+  pullToRefreshLabel: document.getElementById('pullToRefreshLabel'),
+  pullToRefreshSpinner: document.querySelector('#pullToRefresh .pull-refresh-spinner'),
   authOverlay: document.getElementById('authOverlay'),
   authForm: document.getElementById('authForm'),
   authEmail: document.getElementById('authEmail'),
@@ -1235,6 +1486,11 @@ const elements = {
   syncNowButton: document.getElementById('syncNowButton'),
   syncStatusLabel: document.getElementById('syncStatusLabel')
 };
+
+if (elements.pullToRefreshLabel) {
+  elements.pullToRefreshLabel.textContent = PULL_REFRESH_DEFAULT_TEXT;
+}
+resetPullToRefresh({ immediate: true });
 
 console.log('🗨️ Elements initialized:', {
   authOverlay: !!elements.authOverlay,
@@ -1352,7 +1608,15 @@ window.addEventListener('resize', () => {
 document.addEventListener('scroll', () => {
   closeFolderMenu();
   closeAppMenu();
+  if (!pullToRefreshState.pulling && !pullToRefreshState.syncing && getScrollPosition() > 0) {
+    resetPullToRefresh({ immediate: true });
+  }
 }, true);
+
+document.addEventListener('touchstart', handlePullStart, { passive: true });
+document.addEventListener('touchmove', handlePullMove, { passive: false });
+document.addEventListener('touchend', handlePullEnd, { passive: true });
+document.addEventListener('touchcancel', handlePullEnd, { passive: true });
 
 function updateAuthMode(mode) {
   console.log('🔄 updateAuthMode called with:', mode);
@@ -1610,17 +1874,29 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
   }
 }
 
-async function handleManualSyncClick() {
+async function handleManualSyncClick({ source = 'button' } = {}) {
   if (manualSyncInFlight) {
     return;
   }
+  const preserveSettingsScreen = currentScreen === 'settings';
+  if (source === 'button' && preserveSettingsScreen) {
+    hideSettingsScreen();
+  }
   manualSyncInFlight = true;
+
+  if (source === 'pull') {
+    beginPullToRefreshSync();
+  }
+
   updateSyncStatusLabel({ syncing: true });
 
   let indicatorVisible = false;
+  let success = true;
   try {
-    showLoadingIndicator();
-    indicatorVisible = true;
+    if (source !== 'pull') {
+      showLoadingIndicator();
+      indicatorVisible = true;
+    }
 
     await startSyncIfNeeded();
 
@@ -1629,14 +1905,25 @@ async function handleManualSyncClick() {
       await syncManager.pullLatest({ skipIfUnchanged: false });
     }
   } catch (error) {
+    success = false;
     console.warn('Todo sync: manual sync failed', error);
-    alert('Не удалось обновить данные. Проверьте соединение и попробуйте ещё раз.');
+    if (source !== 'pull') {
+      alert('Не удалось обновить данные. Проверьте соединение и попробуйте ещё раз.');
+    }
   } finally {
     if (indicatorVisible) {
       hideLoadingIndicator();
     }
     manualSyncInFlight = false;
     updateSyncStatusLabel({ syncing: syncBootstrapInFlight });
+    if (source === 'pull') {
+      completePullToRefresh({ success });
+    } else if (!pullToRefreshState.syncing) {
+      resetPullToRefresh({ immediate: true });
+    }
+    if (preserveSettingsScreen && source !== 'pull' && source !== 'button') {
+      showSettingsScreen();
+    }
   }
 }
 
@@ -1817,6 +2104,9 @@ function showScreen(screenName, { skipPersist = false } = {}) {
       state.ui.activeScreen = screenName;
       persistState();
     }
+    if (screenName !== 'folders') {
+      resetPullToRefresh({ immediate: true });
+    }
     updateUiContextForScreen(screenName);
     return;
   }
@@ -1826,6 +2116,10 @@ function showScreen(screenName, { skipPersist = false } = {}) {
 
   closeAppMenu();
   currentScreen = screenName;
+
+  if (screenName !== 'folders') {
+    resetPullToRefresh({ immediate: true });
+  }
 
   if (leaving && leaving !== entering) {
     leaving.classList.remove('screen-enter');
@@ -3252,6 +3546,14 @@ function renderRootFolders() {
     return orderA - orderB;
   });
 
+  if (showArchive) {
+    const archiveIndex = rootFolders.findIndex((folder) => folder.id === ARCHIVE_FOLDER_ID);
+    if (archiveIndex !== -1 && archiveIndex !== rootFolders.length - 1) {
+      const [archiveFolder] = rootFolders.splice(archiveIndex, 1);
+      rootFolders.push(archiveFolder);
+    }
+  }
+
   rootFolders.forEach((folder) => {
     if (!showArchive && folder.id === ARCHIVE_FOLDER_ID) {
       return;
@@ -3766,11 +4068,12 @@ if (elements.logoutButton) {
 
 if (elements.syncNowButton) {
   elements.syncNowButton.addEventListener('click', () => {
-    void handleManualSyncClick();
+    void handleManualSyncClick({ source: 'button' });
   });
 }
 
 function showSettingsScreen() {
+  resetPullToRefresh({ immediate: true });
   // Hide other screens
   elements.screenFolders.classList.remove('is-active', 'screen-enter');
   elements.screenTasks.classList.remove('is-active', 'screen-enter');
