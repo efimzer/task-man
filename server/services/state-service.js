@@ -1,4 +1,4 @@
-import { createDefaultState, normalizeState, cloneState } from '../../shared/state.js';
+import { createDefaultState, normalizeState, cloneState, CURRENT_SCHEMA_VERSION } from '../../shared/state.js';
 
 export function createStateService(collection) {
   async function getOrCreateState(email) {
@@ -14,7 +14,18 @@ export function createStateService(collection) {
     }
 
     const { _id, email: _ignored, ...stateData } = existing;
-    return normalizeState(stateData);
+    const normalized = normalizeState(stateData);
+
+    const schemaVersion = Number(stateData?.meta?.schemaVersion ?? 1);
+    const hasArchivedTasks = Array.isArray(stateData?.archivedTasks);
+    if (schemaVersion < CURRENT_SCHEMA_VERSION || hasArchivedTasks) {
+      await collection.updateOne(
+        { email },
+        { $set: { email, ...cloneState(normalized) } }
+      );
+    }
+
+    return normalized;
   }
 
   async function ensureInitialized(email) {
@@ -29,7 +40,7 @@ export function createStateService(collection) {
     if (!email) {
       throw new Error('Email is required to persist state');
     }
-    const payload = cloneState(state);
+    const payload = cloneState(normalizeState(state));
     await collection.updateOne(
       { email },
       { $set: { ...payload, email } },

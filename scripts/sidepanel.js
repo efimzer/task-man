@@ -20,6 +20,16 @@ const EMPTY_STATE_TIMEOUT = 30 * 1000;
 const isChromeExtension = typeof chrome !== 'undefined' && chrome?.runtime?.id;
 const hasChromeStorage = Boolean(isChromeExtension && chrome?.storage?.local);
 const shouldPersistState = false; // Храним состояние только в памяти для всех окружений
+const FAB_LONG_PRESS_THRESHOLD = 500;
+const UI_CONTEXT_STORAGE_KEY = 'todoUiContext';
+const UI_CONTEXT_VERSION = 1;
+
+let uiContext = createDefaultUiContext();
+let uiContextReady = false;
+let uiContextProfileKey = 'anonymous';
+let uiContextStorageSnapshot = null;
+let navigationHistory = [];
+let pendingRestoredContext = null;
 let syncManager = null;
 let inMemoryState = null;
 let storageKey = STORAGE_KEY;
@@ -40,6 +50,10 @@ let emptyStateExpired = false;
 let manualSyncInFlight = false;
 let state = null;
 let startupLoaderActive = false;
+let folderModalParentId = null;
+let fabPressTimer = null;
+let fabLongPressTriggered = false;
+let suppressNextFabClick = false;
 
 const folderMenuState = {
   visible: false,
@@ -125,6 +139,115 @@ const uid = () => {
 };
 
 const normalizeUserKey = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
+
+function createDefaultUiContext() {
+  return {
+    lastScreen: 'folders',
+    lastOpenedFolderId: null,
+    navigationHistory: []
+  };
+}
+
+function sanitizeUiContext(value) {
+  if (!value || typeof value !== 'object') {
+    return createDefaultUiContext();
+  }
+
+  const lastScreen = value.lastScreen === 'tasks' ? 'tasks' : 'folders';
+  const lastOpenedFolderId = typeof value.lastOpenedFolderId === 'string' && value.lastOpenedFolderId.trim()
+    ? value.lastOpenedFolderId.trim()
+    : null;
+  const navigationHistory = Array.isArray(value.navigationHistory)
+    ? value.navigationHistory
+        .map((id) => (typeof id === 'string' ? id.trim() : ''))
+        .filter((id) => Boolean(id))
+    : [];
+
+  return {
+    lastScreen,
+    lastOpenedFolderId,
+    navigationHistory
+  };
+}
+
+function setUiContextProfileKey(email) {
+  const normalized = normalizeUserKey(email);
+  uiContextProfileKey = normalized || 'anonymous';
+}
+
+async function readUiContextStorage() {
+  if (uiContextStorageSnapshot) {
+    return uiContextStorageSnapshot;
+  }
+
+  let stored = null;
+  try {
+    if (hasChromeStorage) {
+      const result = await chrome.storage.local.get(UI_CONTEXT_STORAGE_KEY);
+      stored = result?.[UI_CONTEXT_STORAGE_KEY] ?? null;
+    } else if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(UI_CONTEXT_STORAGE_KEY);
+      stored = raw ? JSON.parse(raw) : null;
+    }
+  } catch (error) {
+    console.warn('Todo UI: unable to read context storage', error);
+  }
+
+  if (!stored || typeof stored !== 'object') {
+    stored = { version: UI_CONTEXT_VERSION, profiles: {} };
+  } else {
+    stored.version = Number.isFinite(stored.version) ? stored.version : UI_CONTEXT_VERSION;
+    if (!stored.profiles || typeof stored.profiles !== 'object') {
+      stored.profiles = {};
+    }
+  }
+
+  uiContextStorageSnapshot = stored;
+  return stored;
+}
+
+async function loadUiContextFromStorage() {
+  const snapshot = await readUiContextStorage();
+  const rawContext = snapshot?.profiles?.[uiContextProfileKey] ?? null;
+  const sanitized = sanitizeUiContext(rawContext);
+  snapshot.profiles = snapshot.profiles ?? {};
+  snapshot.profiles[uiContextProfileKey] = {
+    ...createDefaultUiContext(),
+    ...sanitized,
+    navigationHistory: [...sanitized.navigationHistory]
+  };
+  uiContextStorageSnapshot = snapshot;
+  return sanitized;
+}
+
+async function persistUiContext() {
+  if (!uiContextReady) {
+    return;
+  }
+
+  const snapshot = await readUiContextStorage();
+  const sanitized = sanitizeUiContext(uiContext);
+
+  snapshot.version = UI_CONTEXT_VERSION;
+  snapshot.profiles = snapshot.profiles ?? {};
+  snapshot.profiles[uiContextProfileKey] = {
+    ...createDefaultUiContext(),
+    ...sanitized,
+    navigationHistory: [...sanitized.navigationHistory]
+  };
+
+  uiContextStorageSnapshot = snapshot;
+
+  try {
+    if (hasChromeStorage) {
+      await chrome.storage.local.set({ [UI_CONTEXT_STORAGE_KEY]: snapshot });
+    } else if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(UI_CONTEXT_STORAGE_KEY, JSON.stringify(snapshot));
+    }
+  } catch (error) {
+    console.warn('Todo UI: unable to persist context', error);
+  }
+}
 
 function cleanupLocalState(activeKey) {
   try {
@@ -218,6 +341,8 @@ async function loadState() {
 async function saveState(state, options = {}) {
   const { skipRemote = false, updateMeta = true } = options;
 
+  ensureSystemFolders(state);
+
   if (updateMeta) {
     const prevMeta = state.meta ?? {};
     const nextVersion = Number.isFinite(prevMeta.version) ? prevMeta.version + 1 : 1;
@@ -251,35 +376,768 @@ async function saveState(state, options = {}) {
   }
 }
 
-function ensureAllFolder(state) {
-  const baselineAll = { id: ALL_FOLDER_ID, name: 'Все' };
-  const baselineArchive = { id: ARCHIVE_FOLDER_ID, name: 'Архив' };
+const SYSTEM_FOLDER_BLUEPRINTS = [
+  { id: ALL_FOLDER_ID, name: 'Все', parentId: null, order: 0 },
+  { id: ARCHIVE_FOLDER_ID, name: 'Архив', parentId: ALL_FOLDER_ID, order: 1000 }
+];
 
-  const filtered = state.folders.filter((folder) => folder.id !== ALL_FOLDER_ID && folder.id !== ARCHIVE_FOLDER_ID);
-  const allFolder = state.folders.find((folder) => folder.id === ALL_FOLDER_ID);
-  const archiveFolder = state.folders.find((folder) => folder.id === ARCHIVE_FOLDER_ID);
+const PROTECTED_FOLDER_IDS = new Set([
+  ALL_FOLDER_ID,
+  ARCHIVE_FOLDER_ID
+]);
 
-  const normalizedAll = allFolder ? { ...baselineAll, ...allFolder, id: ALL_FOLDER_ID } : baselineAll;
-  const normalizedArchive = archiveFolder ? { ...baselineArchive, ...archiveFolder, id: ARCHIVE_FOLDER_ID } : baselineArchive;
+const ALLOWED_LINK_PROTOCOLS = new Set(['http:', 'https:', 'ftp:', 'sftp:']);
+const LINKIFY_PATTERN = /(\[([^\]]+)\]\(([^)]+)\))|((?:https?|ftp):\/\/[^\s<>()]+|(?:www\.)[^\s<>()]+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<>()]*)?)/gi;
 
-  state.folders = [normalizedAll, ...filtered, normalizedArchive];
+function ensureSystemFolders(state) {
+  const now = Date.now();
+  const map = new Map();
+  const folders = Array.isArray(state.folders) ? state.folders : [];
 
-  const existingIds = new Set(state.folders.map((folder) => folder.id));
-  if (!existingIds.has(state.ui.selectedFolderId)) {
-    state.ui.selectedFolderId = ALL_FOLDER_ID;
+  folders.forEach((folder, index) => {
+    if (!folder || typeof folder !== 'object') {
+      return;
+    }
+    const id = typeof folder.id === 'string' && folder.id.trim() ? folder.id.trim() : `folder-${index}`;
+    const name = typeof folder.name === 'string' && folder.name.trim() ? folder.name.trim() : `Папка ${index + 1}`;
+    const parentId = typeof folder.parentId === 'string' && folder.parentId.trim()
+      ? folder.parentId.trim()
+      : null;
+    const createdAt = Number.isFinite(folder.createdAt) ? folder.createdAt : now;
+    const updatedAt = Number.isFinite(folder.updatedAt) ? folder.updatedAt : createdAt;
+    const order = Number.isFinite(folder.order) ? folder.order : index;
+    const icon = typeof folder.icon === 'string' && folder.icon.trim() ? folder.icon.trim() : null;
+
+    map.set(id, {
+      id,
+      name,
+      parentId: parentId === id ? ALL_FOLDER_ID : parentId,
+      createdAt,
+      updatedAt,
+      order,
+      icon
+    });
+  });
+
+  SYSTEM_FOLDER_BLUEPRINTS.forEach((blueprint, index) => {
+    const existing = map.get(blueprint.id);
+    if (existing) {
+      existing.name = existing.name || blueprint.name;
+      existing.parentId = typeof existing.parentId === 'string' ? existing.parentId : blueprint.parentId;
+      existing.order = Number.isFinite(existing.order) ? existing.order : (blueprint.order ?? index);
+      existing.createdAt = Number.isFinite(existing.createdAt) ? existing.createdAt : now;
+      existing.updatedAt = Number.isFinite(existing.updatedAt) ? existing.updatedAt : now;
+      existing.icon = existing.icon ?? blueprint.icon ?? null;
+    } else {
+      map.set(blueprint.id, {
+        id: blueprint.id,
+        name: blueprint.name,
+        parentId: blueprint.parentId,
+        createdAt: now,
+        updatedAt: now,
+        order: blueprint.order ?? index,
+        icon: blueprint.icon ?? null
+      });
+    }
+  });
+
+  state.folders = Array.from(map.values()).sort((a, b) => {
+    if (a.order === b.order) {
+      return a.name.localeCompare(b.name, 'ru');
+    }
+    return a.order - b.order;
+  });
+
+  const folderIds = new Set(state.folders.map((folder) => folder.id));
+  if (!folderIds.has(state.ui.selectedFolderId)) {
+    state.ui.selectedFolderId = folderIds.has(FOLDER_IDS.INBOX) ? FOLDER_IDS.INBOX : ALL_FOLDER_ID;
     if (state.ui.activeScreen === 'tasks') {
       state.ui.activeScreen = 'folders';
     }
   }
+
+  if (!Array.isArray(state.ui.expandedFolderIds)) {
+    state.ui.expandedFolderIds = [ALL_FOLDER_ID];
+  } else {
+    state.ui.expandedFolderIds = Array.from(
+      new Set(
+        state.ui.expandedFolderIds.filter((id) => typeof id === 'string' && folderIds.has(id))
+      )
+    );
+    if (!state.ui.expandedFolderIds.length) {
+      state.ui.expandedFolderIds.push(ALL_FOLDER_ID);
+    }
+  }
+
+  if (pendingRestoredContext) {
+    attemptRestorePendingUiContext();
+  }
+}
+
+function getFolderParentId(folderId) {
+  if (!folderId) {
+    return null;
+  }
+  const folder = state.folders.find((entry) => entry.id === folderId);
+  return folder?.parentId ?? null;
+}
+
+function getFolderById(folderId) {
+  if (!folderId) {
+    return null;
+  }
+  return state.folders.find((folder) => folder.id === folderId) ?? null;
+}
+
+function expandAncestors(folderId) {
+  const expanded = new Set(Array.isArray(state.ui.expandedFolderIds) ? state.ui.expandedFolderIds : [ALL_FOLDER_ID]);
+  let current = folderId;
+  while (current) {
+    expanded.add(current);
+    current = getFolderParentId(current);
+  }
+  expanded.add(ALL_FOLDER_ID);
+  state.ui.expandedFolderIds = Array.from(expanded);
+}
+
+function computeFolderPath(folderId) {
+  if (!folderId || folderId === ALL_FOLDER_ID) {
+    return [];
+  }
+  const path = [];
+  const seen = new Set();
+  let current = folderId;
+
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const folder = getFolderById(current);
+    if (!folder) {
+      break;
+    }
+    path.unshift(folder.id);
+    const parentId = folder.parentId ?? null;
+    if (!parentId || parentId === ALL_FOLDER_ID) {
+      break;
+    }
+    current = parentId;
+  }
+
+  return path;
+}
+
+function updateNavigationHistory(folderId) {
+  if (!folderId || !getFolderById(folderId) || folderId === ALL_FOLDER_ID) {
+    navigationHistory = [];
+  } else {
+    navigationHistory = computeFolderPath(folderId);
+  }
+  uiContext.navigationHistory = [...navigationHistory];
+}
+
+function applyUiContext(restoredContext) {
+  const sanitized = sanitizeUiContext(restoredContext);
+  uiContext = {
+    ...createDefaultUiContext(),
+    ...sanitized,
+    navigationHistory: [...(sanitized.navigationHistory ?? [])]
+  };
+
+  pendingRestoredContext = null;
+
+  const desiredScreen = sanitized.lastScreen === 'tasks' ? 'tasks' : 'folders';
+  const desiredFolderId = typeof sanitized.lastOpenedFolderId === 'string' && sanitized.lastOpenedFolderId.trim()
+    ? sanitized.lastOpenedFolderId.trim()
+    : null;
+
+  if (desiredScreen === 'tasks') {
+    if (desiredFolderId) {
+      const folder = getFolderById(desiredFolderId);
+      if (folder) {
+        state.ui.selectedFolderId = folder.id;
+        state.ui.activeScreen = 'tasks';
+        expandAncestors(folder.id);
+        updateNavigationHistory(folder.id);
+        uiContext.lastScreen = 'tasks';
+        uiContext.lastOpenedFolderId = folder.id;
+        return 'applied';
+      }
+      pendingRestoredContext = {
+        lastScreen: 'tasks',
+        lastOpenedFolderId: desiredFolderId
+      };
+      state.ui.activeScreen = 'folders';
+      updateNavigationHistory(null);
+      uiContext.lastScreen = 'tasks';
+      uiContext.lastOpenedFolderId = desiredFolderId;
+      return 'pending';
+    }
+
+    state.ui.activeScreen = 'folders';
+    uiContext.lastScreen = 'folders';
+    uiContext.lastOpenedFolderId = null;
+    updateNavigationHistory(null);
+    return 'fallback';
+  }
+
+  state.ui.activeScreen = 'folders';
+  uiContext.lastScreen = 'folders';
+  uiContext.lastOpenedFolderId = null;
+  updateNavigationHistory(null);
+  return 'applied';
+}
+
+function attemptRestorePendingUiContext({ allowFallback = false } = {}) {
+  if (!pendingRestoredContext) {
+    if (allowFallback && !uiContextReady) {
+      uiContextReady = true;
+    }
+    return 'none';
+  }
+
+  const targetScreen = pendingRestoredContext.lastScreen === 'tasks' ? 'tasks' : 'folders';
+  const targetFolderId = typeof pendingRestoredContext.lastOpenedFolderId === 'string' && pendingRestoredContext.lastOpenedFolderId.trim()
+    ? pendingRestoredContext.lastOpenedFolderId.trim()
+    : null;
+
+  if (targetScreen === 'tasks' && targetFolderId) {
+    const folder = getFolderById(targetFolderId);
+    if (folder) {
+      state.ui.selectedFolderId = folder.id;
+      state.ui.activeScreen = 'tasks';
+      expandAncestors(folder.id);
+      updateNavigationHistory(folder.id);
+      uiContext.lastScreen = 'tasks';
+      uiContext.lastOpenedFolderId = folder.id;
+      pendingRestoredContext = null;
+      uiContextReady = true;
+      return 'restored';
+    }
+
+    if (!allowFallback) {
+      return 'pending';
+    }
+  }
+
+  pendingRestoredContext = null;
+  uiContext.lastScreen = 'folders';
+  uiContext.lastOpenedFolderId = null;
+  updateNavigationHistory(null);
+  if (!uiContextReady && allowFallback) {
+    uiContextReady = true;
+  }
+  return targetScreen === 'tasks' ? 'fallback' : 'applied';
+}
+
+async function restoreUiContextFromStorage() {
+  try {
+    const stored = await loadUiContextFromStorage();
+    const status = applyUiContext(stored);
+    if (status === 'applied' || status === 'fallback') {
+      uiContextReady = true;
+    } else {
+      uiContextReady = false;
+    }
+  } catch (error) {
+    console.warn('Todo UI: unable to restore context', error);
+    uiContext = createDefaultUiContext();
+    state.ui.activeScreen = 'folders';
+    updateNavigationHistory(null);
+    uiContextReady = true;
+  }
+}
+
+function updateUiContextForScreen(screenName) {
+  if (!uiContextReady) {
+    return;
+  }
+
+  if (screenName === 'tasks') {
+    const selected = typeof state?.ui?.selectedFolderId === 'string'
+      ? state.ui.selectedFolderId
+      : null;
+    if (selected && !getFolderById(selected)) {
+      updateNavigationHistory(null);
+      uiContext.lastOpenedFolderId = null;
+    } else {
+      updateNavigationHistory(selected ?? null);
+      uiContext.lastOpenedFolderId = selected ?? null;
+    }
+    uiContext.lastScreen = 'tasks';
+  } else {
+    uiContext.lastScreen = 'folders';
+    uiContext.lastOpenedFolderId = null;
+    updateNavigationHistory(null);
+  }
+
+  void persistUiContext();
+}
+
+function computeFolderTaskCounts() {
+  const counts = new Map();
+  const parentMap = new Map();
+  const folders = Array.isArray(state?.folders) ? state.folders : [];
+  const tasks = Array.isArray(state?.tasks) ? state.tasks : [];
+  const archivedTasks = Array.isArray(state?.archivedTasks) ? state.archivedTasks : [];
+
+  folders.forEach((folder) => {
+    counts.set(folder.id, 0);
+    parentMap.set(folder.id, folder.parentId ?? null);
+  });
+
+  counts.set(ALL_FOLDER_ID, counts.get(ALL_FOLDER_ID) ?? 0);
+  counts.set(ARCHIVE_FOLDER_ID, archivedTasks.length);
+
+  tasks.forEach((task) => {
+    if (task.completed) {
+      return;
+    }
+    if (typeof task.folderId === 'string' && parentMap.has(task.folderId)) {
+      let current = task.folderId;
+      while (current) {
+        counts.set(current, (counts.get(current) ?? 0) + 1);
+        current = parentMap.get(current) || null;
+      }
+    }
+    counts.set(ALL_FOLDER_ID, (counts.get(ALL_FOLDER_ID) ?? 0) + 1);
+  });
+
+  return { counts, parentMap };
+}
+
+function appendTextWithBreaks(target, text) {
+  if (!text) {
+    return;
+  }
+  const parts = String(text).split('\n');
+  parts.forEach((part, index) => {
+    if (part) {
+      target.appendChild(document.createTextNode(part));
+    } else {
+      target.appendChild(document.createTextNode(''));
+    }
+    if (index < parts.length - 1) {
+      target.appendChild(document.createElement('br'));
+    }
+  });
+}
+
+function stripTrailingPunctuation(value) {
+  let url = value;
+  let trailing = '';
+
+  while (url.length) {
+    const lastChar = url.charAt(url.length - 1);
+    if (/[.,!?;:]/.test(lastChar)) {
+      trailing = lastChar + trailing;
+      url = url.slice(0, -1);
+      continue;
+    }
+    if (lastChar === ')' || lastChar === ']' || lastChar === '}') {
+      const pair = lastChar === ')' ? '(' : lastChar === ']' ? '[' : '{';
+      const openCount = (url.match(new RegExp(`\\${pair}`, 'g')) || []).length;
+      const closeCount = (url.match(new RegExp(`\\${lastChar}`, 'g')) || []).length;
+      if (closeCount > openCount) {
+        trailing = lastChar + trailing;
+        url = url.slice(0, -1);
+        continue;
+      }
+    }
+    break;
+  }
+
+  return { url, trailing };
+}
+
+function normalizeUrl(rawValue) {
+  let value = typeof rawValue === 'string' ? rawValue.trim() : '';
+  if (!value) {
+    return null;
+  }
+  if (/^(javascript|data|vbscript):/i.test(value)) {
+    return null;
+  }
+  const hasProtocol = /^[a-z][\w+.-]*:/i.test(value);
+  if (!hasProtocol) {
+    value = `https://${value}`;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (!ALLOWED_LINK_PROTOCOLS.has(parsed.protocol)) {
+      return null;
+    }
+    return parsed.toString();
+  } catch (error) {
+    return null;
+  }
+}
+
+function createLinkElement({ href, label }) {
+  const anchor = document.createElement('a');
+  anchor.className = 'task-link';
+  anchor.href = href;
+  anchor.target = '_blank';
+  anchor.rel = 'noopener noreferrer';
+  anchor.textContent = label;
+
+  const stop = (event) => event.stopPropagation();
+  anchor.addEventListener('click', (event) => {
+    if (event.detail > 1) {
+      event.preventDefault();
+    }
+    stop(event);
+  });
+  anchor.addEventListener('mousedown', stop);
+  anchor.addEventListener('mouseup', stop);
+  anchor.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+
+  return anchor;
+}
+
+function createLinkifiedFragment(text) {
+  const fragment = document.createDocumentFragment();
+  if (!text) {
+    return fragment;
+  }
+
+  const input = String(text);
+  let lastIndex = 0;
+  LINKIFY_PATTERN.lastIndex = 0;
+  let match;
+
+  while ((match = LINKIFY_PATTERN.exec(input)) !== null) {
+    const fullMatch = match[0];
+    const matchStart = match.index;
+    const matchEnd = match.index + fullMatch.length;
+
+    if (matchStart > lastIndex) {
+      appendTextWithBreaks(fragment, input.slice(lastIndex, matchStart));
+    }
+
+    const isMarkdown = Boolean(match[1]);
+    if (!isMarkdown) {
+      const precedingChar = matchStart > 0 ? input.charAt(matchStart - 1) : '';
+      if (precedingChar === '@') {
+        appendTextWithBreaks(fragment, fullMatch);
+        lastIndex = matchEnd;
+        continue;
+      }
+    }
+
+    let label = '';
+    let rawUrl = '';
+    let trailing = '';
+
+    if (isMarkdown) {
+      label = match[2] ?? '';
+      rawUrl = match[3] ?? '';
+    } else {
+      const stripped = stripTrailingPunctuation(fullMatch);
+      label = stripped.url;
+      rawUrl = stripped.url;
+      trailing = stripped.trailing;
+    }
+
+    const normalized = normalizeUrl(rawUrl);
+    if (!normalized) {
+      appendTextWithBreaks(fragment, fullMatch);
+      lastIndex = matchEnd;
+      continue;
+    }
+
+    const anchor = createLinkElement({ href: normalized, label: label || normalized });
+    fragment.appendChild(anchor);
+
+    if (trailing) {
+      appendTextWithBreaks(fragment, trailing);
+    }
+
+    lastIndex = matchEnd;
+  }
+
+  if (lastIndex < input.length) {
+    appendTextWithBreaks(fragment, input.slice(lastIndex));
+  }
+
+  return fragment;
+}
+
+function renderTaskTitle(node, text) {
+  if (!node) {
+    return;
+  }
+  node.textContent = '';
+  const fragment = createLinkifiedFragment(text);
+  node.appendChild(fragment);
+}
+
+function isDescendantFolder(candidateId, ancestorId) {
+  if (!candidateId || !ancestorId) {
+    return false;
+  }
+  if (candidateId === ancestorId) {
+    return true;
+  }
+  let current = candidateId;
+  const guard = new Set();
+  while (current && !guard.has(current)) {
+    guard.add(current);
+    const parent = getFolderParentId(current);
+    if (!parent) {
+      break;
+    }
+    if (parent === ancestorId) {
+      return true;
+    }
+    current = parent;
+  }
+  return false;
+}
+
+function folderHasTaskHistory(folderId) {
+  if (!state) {
+    return false;
+  }
+  if (!folderId || folderId === ALL_FOLDER_ID) {
+    return (state.tasks?.length ?? 0) > 0 || (state.archivedTasks?.length ?? 0) > 0;
+  }
+  if (folderId === ARCHIVE_FOLDER_ID) {
+    return false;
+  }
+  const hasActive = state.tasks.some((task) => task.folderId && isDescendantFolder(task.folderId, folderId));
+  if (hasActive) {
+    return true;
+  }
+  return state.archivedTasks.some((task) => task.folderId && isDescendantFolder(task.folderId, folderId));
+}
+
+function shouldShowSuccessIllustration(folderId) {
+  return folderHasTaskHistory(folderId);
+}
+
+function buildBreadcrumbSegments(folderId) {
+  const segments = [];
+  let current = folderId;
+
+  while (current) {
+    const folder = getFolderById(current);
+    if (!folder) {
+      break;
+    }
+    if (folder.id === ALL_FOLDER_ID) {
+      break;
+    }
+    segments.unshift(folder);
+    current = folder.parentId ?? null;
+  }
+
+  return segments;
+}
+
+function renderTasksHeader(folderId) {
+  const header = elements.tasksHeaderTitle;
+  if (!header) {
+    return;
+  }
+
+  header.innerHTML = '';
+
+  if (!folderId) {
+    header.textContent = 'Папка';
+    header.title = 'Папка';
+    return;
+  }
+
+  if (folderId === ARCHIVE_FOLDER_ID) {
+    header.textContent = 'Архив';
+    header.title = 'Архив';
+    return;
+  }
+
+  const folder = getFolderById(folderId);
+  if (!folder) {
+    header.textContent = 'Папка';
+    header.title = 'Папка';
+    return;
+  }
+
+  if (folderId === ALL_FOLDER_ID) {
+    header.textContent = folder.name;
+    header.title = folder.name;
+    return;
+  }
+
+  const segments = buildBreadcrumbSegments(folderId);
+  if (segments.length <= 1) {
+    header.textContent = folder.name;
+    header.title = folder.name;
+    return;
+  }
+  let displaySegments = [...segments];
+  let ellipsisTargetId = null;
+
+  if (displaySegments.length > 2) {
+    const hidden = displaySegments.slice(0, displaySegments.length - 2);
+    const lastHidden = hidden[hidden.length - 1];
+    ellipsisTargetId = lastHidden?.id ?? hidden[0]?.id ?? null;
+    displaySegments = [
+      { id: ellipsisTargetId, name: '…', isEllipsis: true },
+      ...displaySegments.slice(-2)
+    ];
+  }
+
+  displaySegments.forEach((segment, index) => {
+    const span = document.createElement('span');
+    span.className = 'breadcrumb-segment';
+    span.textContent = segment.isEllipsis ? '…' : segment.name;
+
+    const isLast = index === displaySegments.length - 1;
+    const targetId = segment.isEllipsis ? ellipsisTargetId : segment.id;
+
+    if (!isLast && targetId) {
+      span.classList.add('is-link');
+      span.tabIndex = 0;
+      span.setAttribute('role', 'button');
+      span.addEventListener('click', () => {
+        selectFolder(targetId, { openTasks: true });
+      });
+      span.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          selectFolder(targetId, { openTasks: true });
+        }
+      });
+    }
+
+    header.appendChild(span);
+
+    if (!isLast) {
+      const separator = document.createElement('span');
+      separator.className = 'breadcrumb-separator';
+      separator.textContent = '/';
+      header.appendChild(separator);
+    }
+  });
+
+  header.title = segments.map((segment) => segment.name).join(' / ');
 }
 
 function normalizeLoadedState() {
-  ensureAllFolder(state);
-  state.tasks = state.tasks.map((task, index) => ({
-    ...task,
-    order: typeof task.order === 'number' ? task.order : index
-  }));
+  ensureSystemFolders(state);
+  const now = Date.now();
+  const folderIds = new Set(state.folders.map((folder) => folder.id));
+  let mutated = false;
+
+  if (!Array.isArray(state.archivedTasks)) {
+    state.archivedTasks = [];
+    mutated = true;
+  }
+
+  const seenIds = new Set();
+
+  state.archivedTasks = state.archivedTasks.map((task, index) => {
+    if (!task || typeof task !== 'object') {
+      mutated = true;
+      return null;
+    }
+    const text = typeof task.text === 'string' && task.text.trim()
+      ? task.text.trim()
+      : typeof task.title === 'string'
+        ? task.title.trim()
+        : '';
+    if (!text) {
+      mutated = true;
+      return null;
+    }
+    const normalized = {
+      ...task,
+      text,
+      folderId: folderIds.has(task.folderId) ? task.folderId : null,
+      completed: true,
+      createdAt: Number.isFinite(task.createdAt) ? task.createdAt : now,
+      updatedAt: Number.isFinite(task.updatedAt) ? task.updatedAt : now,
+      completedAt: Number.isFinite(task.completedAt) ? task.completedAt : now + index,
+      order: Number.isFinite(task.order) ? task.order : index
+    };
+    seenIds.add(normalized.id);
+    delete normalized.title;
+    return normalized;
+  }).filter(Boolean);
+
+  state.tasks = state.tasks.map((task, index) => {
+    if (!task || typeof task !== 'object') {
+      mutated = true;
+      return null;
+    }
+    const text = typeof task.text === 'string' && task.text.trim()
+      ? task.text.trim()
+      : typeof task.title === 'string'
+        ? task.title.trim()
+        : '';
+    if (!text) {
+      mutated = true;
+      return null;
+    }
+    const folderId = folderIds.has(task.folderId) ? task.folderId : null;
+    const createdAt = Number.isFinite(task.createdAt) ? task.createdAt : now;
+    const updatedAt = Number.isFinite(task.updatedAt) ? task.updatedAt : createdAt;
+    const order = Number.isFinite(task.order) ? task.order : index;
+
+    const normalizedTask = {
+      ...task,
+      text,
+      folderId,
+      completed: Boolean(task.completed),
+      createdAt,
+      updatedAt,
+      order
+    };
+
+    delete normalizedTask.title;
+
+    if (normalizedTask.completed) {
+      if (!seenIds.has(normalizedTask.id)) {
+        seenIds.add(normalizedTask.id);
+        state.archivedTasks.push({
+          ...normalizedTask,
+          completed: true,
+          completedAt: Number.isFinite(normalizedTask.completedAt) ? normalizedTask.completedAt : updatedAt
+        });
+        mutated = true;
+      }
+      return null;
+    }
+
+    if (seenIds.has(normalizedTask.id)) {
+      mutated = true;
+      return null;
+    }
+    seenIds.add(normalizedTask.id);
+
+    delete normalizedTask.completedAt;
+    return { ...normalizedTask, completed: false };
+  }).filter(Boolean);
+  state.archivedTasks.sort((a, b) => {
+    const timeA = Number.isFinite(a.completedAt) ? a.completedAt : (a.updatedAt ?? 0);
+    const timeB = Number.isFinite(b.completedAt) ? b.completedAt : (b.updatedAt ?? 0);
+    return timeB - timeA;
+  });
+  state.tasks.sort((a, b) => {
+    const orderA = Number.isFinite(a.order) ? a.order : 0;
+    const orderB = Number.isFinite(b.order) ? b.order : 0;
+    if (orderA === orderB) {
+      return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+    }
+    return orderA - orderB;
+  });
   state.meta = state.meta ?? { version: 0, updatedAt: Date.now() };
+
+  if (mutated) {
+    void saveState(state, { skipRemote: true, updateMeta: false });
+  }
 }
 
 function applyRemoteState(remoteState) {
@@ -293,7 +1151,7 @@ function applyRemoteState(remoteState) {
 
   state.folders = normalized.folders;
   state.tasks = normalized.tasks;
-  state.archivedTasks = normalized.archivedTasks;
+  state.archivedTasks = normalized.archivedTasks ?? [];
   state.ui = {
     ...normalized.ui,
     ...preservedUI,
@@ -309,9 +1167,18 @@ function applyRemoteState(remoteState) {
       : preservedEmptyState
   };
 
-  ensureAllFolder(state);
+  ensureSystemFolders(state);
+  attemptRestorePendingUiContext({ allowFallback: true });
+  const targetScreen = state.ui?.activeScreen === 'tasks' ? 'tasks' : 'folders';
+
   saveState(state, { skipRemote: true, updateMeta: false });
+
+  if (currentScreen !== targetScreen) {
+    showScreen(targetScreen, { skipPersist: true });
+  }
+
   render();
+  updateUiContextForScreen(targetScreen);
 }
 
 function updateSyncStatusLabel({ syncing = false } = {}) {
@@ -407,16 +1274,20 @@ if (initialToken || initialCookie) {
 console.log('🔑 Auth store initialized, user:', initialAuthUser, 'token:', authStore.getToken());
 
 await bootstrapAuthContext(initialAuthUser?.email);
+setUiContextProfileKey(initialAuthUser?.email);
 
 state = await loadState();
 console.log('📋 Loaded state:', {
   folders: state.folders?.length,
   tasks: state.tasks?.length,
-  archivedTasks: state.archivedTasks?.length,
+  completedTasks: state.tasks?.filter?.((task) => task?.completed)?.length ?? 0,
   selectedFolderId: state.ui?.selectedFolderId
 });
 
 normalizeLoadedState();
+
+uiContextReady = false;
+await restoreUiContextFromStorage();
 
 await settingsManager.init();
 updateThemeControls();
@@ -470,6 +1341,8 @@ elements.authToggleMode?.addEventListener('click', toggleAuthMode);
 
 elements.folderList.addEventListener('click', handleFolderClick);
 elements.folderList.addEventListener('keydown', handleFolderKeydown);
+elements.folderList.addEventListener('change', handleTaskChange);
+elements.folderList.addEventListener('dblclick', handleTaskDblClick);
 elements.folderMenu.addEventListener('click', handleFolderMenuClick);
 document.addEventListener('click', handleDocumentClick, true);
 window.addEventListener('resize', () => {
@@ -656,9 +1529,13 @@ async function switchActiveUserSession(user) {
   }
   const email = user?.email ?? null;
   await bootstrapAuthContext(email);
+  setUiContextProfileKey(email);
   state = await loadState();
   normalizeLoadedState();
+  uiContextReady = false;
+  await restoreUiContextFromStorage();
   render();
+  updateUiContextForScreen(state.ui?.activeScreen === 'tasks' ? 'tasks' : 'folders');
 }
 
 function stopSyncManager() {
@@ -707,7 +1584,7 @@ async function startSyncIfNeeded({ forcePull = false } = {}) {
           state.archivedTasks = fresh.archivedTasks;
           state.ui = { ...state.ui, ...fresh.ui };
           state.meta = { ...fresh.meta };
-          ensureAllFolder(state);
+          ensureSystemFolders(state);
           await saveState(state, { skipRemote: true, updateMeta: false });
           await syncManager.forcePush();
         }
@@ -836,7 +1713,7 @@ elements.appMenuButtons.forEach((button) => {
 });
 elements.logoutAction?.addEventListener('click', handleLogoutAction);
 elements.clearArchiveAction?.addEventListener('click', handleClearArchive);
-elements.floatingActionButton?.addEventListener('click', handleFloatingActionClick);
+setupFloatingActionButton();
 document.addEventListener('click', handleAppMenuDocumentClick, true);
 
 elements.taskList.addEventListener('click', handleTaskListClick);
@@ -847,7 +1724,7 @@ elements.taskList.addEventListener('dragstart', handleDragStart);
 elements.taskList.addEventListener('dragover', handleDragOver);
 elements.taskList.addEventListener('dragend', handleDragEnd);
 
-elements.backButton.addEventListener('click', () => showScreen('folders'));
+elements.backButton.addEventListener('click', handleBackNavigation);
 
 document.addEventListener('keydown', handleGlobalKeydown);
 
@@ -863,17 +1740,22 @@ function handleGlobalKeydown(event) {
     return;
   }
 
-  if (event.key !== 'Enter') {
-    return;
-  }
-
   const target = event.target;
   const tagName = (target?.tagName || '').toLowerCase();
   const isEditable = target?.isContentEditable || tagName === 'input' || tagName === 'textarea';
-  if (isEditable) {
+  const lowerKey = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+
+  if (lowerKey === 'f' && !isEditable) {
+    event.preventDefault();
+    if (event.shiftKey) {
+      createTaskViaShortcut();
+    } else {
+      createFolderViaShortcut();
+    }
     return;
   }
-  if (currentScreen !== 'tasks') {
+
+  if (event.key !== 'Enter' || isEditable) {
     return;
   }
   if (!elements.folderModal.classList.contains('hidden')) {
@@ -885,11 +1767,37 @@ function handleGlobalKeydown(event) {
 
   event.preventDefault();
 
+  if (currentScreen !== 'tasks') {
+    handleAddTaskInline({ forceComposerOnRoot: true });
+    return;
+  }
+
   if (inlineComposer) {
     commitInlineTask(inlineComposer.input.value.trim());
   } else {
     handleAddTaskInline();
   }
+}
+
+function handleBackNavigation() {
+  if (currentScreen !== 'tasks') {
+    showScreen('folders');
+    return;
+  }
+
+  const currentFolder = getFolderById(state.ui.selectedFolderId);
+  if (!currentFolder) {
+    showScreen('folders');
+    return;
+  }
+
+  const parentId = currentFolder.parentId;
+  if (parentId && parentId !== ALL_FOLDER_ID) {
+    selectFolder(parentId, { openTasks: true });
+    return;
+  }
+
+  showScreen('folders');
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -909,6 +1817,7 @@ function showScreen(screenName, { skipPersist = false } = {}) {
       state.ui.activeScreen = screenName;
       persistState();
     }
+    updateUiContextForScreen(screenName);
     return;
   }
 
@@ -936,6 +1845,7 @@ function showScreen(screenName, { skipPersist = false } = {}) {
   }
 
   state.ui.activeScreen = screenName;
+  updateUiContextForScreen(screenName);
   if (!skipPersist) {
     persistState();
   }
@@ -943,9 +1853,10 @@ function showScreen(screenName, { skipPersist = false } = {}) {
   updateFloatingAction();
 }
 
-function openFolderModal() {
+function openFolderModal({ parentId = null, initialName = '' } = {}) {
+  folderModalParentId = parentId;
   closeFolderMenu();
-  elements.folderModalInput.value = '';
+  elements.folderModalInput.value = initialName;
   clearInvalid(elements.folderModalInput);
   elements.folderModal.classList.remove('hidden');
   elements.modalBackdrop.classList.remove('hidden');
@@ -953,12 +1864,15 @@ function openFolderModal() {
     elements.folderModal.classList.add('show');
     elements.modalBackdrop.classList.add('show');
     elements.folderModalInput.focus({ preventScroll: true });
+    elements.folderModalInput.select();
   });
 }
 
 function closeFolderModal() {
   elements.folderModal.classList.remove('show');
   elements.modalBackdrop.classList.remove('show');
+  editingFolderId = null;
+  folderModalParentId = null;
   const hide = () => {
     elements.folderModal.classList.add('hidden');
     elements.modalBackdrop.classList.add('hidden');
@@ -976,25 +1890,224 @@ function handleFolderModalSubmit(event) {
     return;
   }
 
-  addFolder(title);
+  if (editingFolderId) {
+    const folder = getFolderById(editingFolderId);
+    if (folder) {
+      folder.name = title;
+      folder.updatedAt = Date.now();
+      ensureSystemFolders(state);
+      persistState();
+    }
+    editingFolderId = null;
+    folderModalParentId = null;
+    render();
+    closeFolderModal();
+    return;
+  }
+
+  addFolder(title, { parentId: folderModalParentId });
+  folderModalParentId = null;
   closeFolderModal();
 }
 
-function addFolder(name) {
+function addFolder(name, { parentId } = {}) {
   const id = uid();
-  state.folders.splice(state.folders.length - 1, 0, { id, name });
-  ensureAllFolder(state);
+  const now = Date.now();
+  let targetParent = ALL_FOLDER_ID;
+  if (typeof parentId === 'string') {
+    targetParent = parentId === ARCHIVE_FOLDER_ID ? ALL_FOLDER_ID : parentId;
+  } else if (parentId === null) {
+    targetParent = null;
+  }
+
+  const siblingOrders = state.folders
+    .filter((folder) => folder.parentId === targetParent && folder.id !== ARCHIVE_FOLDER_ID)
+    .map((folder) => folder.order ?? 0);
+  const nextOrder = siblingOrders.length ? Math.max(...siblingOrders) + 1 : state.folders.length + 1;
+
+  state.folders.push({
+    id,
+    name,
+    parentId: targetParent,
+    createdAt: now,
+    updatedAt: now,
+    order: nextOrder,
+    icon: null
+  });
+
+  ensureSystemFolders(state);
   persistState();
   render();
   return id;
 }
 
+function setupFloatingActionButton() {
+  const fab = elements.floatingActionButton;
+  if (!fab) {
+    return;
+  }
+
+  fab.addEventListener('pointerdown', handleFabPointerDown);
+  fab.addEventListener('pointerup', handleFabPointerUp);
+  fab.addEventListener('pointerleave', handleFabPointerCancel);
+  fab.addEventListener('pointercancel', handleFabPointerCancel);
+  fab.addEventListener('click', (event) => {
+    if (suppressNextFabClick) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressNextFabClick = false;
+      return;
+    }
+    triggerFabShortPress();
+  });
+  fab.addEventListener('contextmenu', (event) => event.preventDefault());
+}
+
+function handleFabPointerDown(event) {
+  if (event.pointerType === 'mouse' && event.button !== 0) {
+    return;
+  }
+  suppressNextFabClick = true;
+  fabLongPressTriggered = false;
+  clearTimeout(fabPressTimer);
+  fabPressTimer = setTimeout(() => {
+    fabLongPressTriggered = true;
+    triggerFabLongPress();
+    fabPressTimer = null;
+  }, FAB_LONG_PRESS_THRESHOLD);
+}
+
+function handleFabPointerUp() {
+  if (fabPressTimer) {
+    clearTimeout(fabPressTimer);
+    fabPressTimer = null;
+    if (!fabLongPressTriggered) {
+      triggerFabShortPress();
+    }
+  }
+  setTimeout(() => {
+    suppressNextFabClick = false;
+  }, 0);
+}
+
+function handleFabPointerCancel() {
+  if (fabPressTimer) {
+    clearTimeout(fabPressTimer);
+    fabPressTimer = null;
+  }
+  setTimeout(() => {
+    suppressNextFabClick = false;
+  }, 0);
+}
+
+function triggerFabShortPress() {
+  if (!elements.folderModal.classList.contains('hidden')) {
+    return;
+  }
+  if (!state) {
+    return;
+  }
+  if (folderMenuState.visible) {
+    closeFolderMenu();
+  }
+  closeAppMenu();
+  if (currentScreen === 'folders') {
+    handleAddTaskInline({ forceComposerOnRoot: true });
+    return;
+  }
+
+  if (currentScreen === 'tasks') {
+    if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+      state.ui.selectedFolderId = FOLDER_IDS.INBOX;
+      render();
+    }
+    handleAddTaskInline();
+    return;
+  }
+
+  showScreen('tasks');
+  requestAnimationFrame(() => {
+    handleAddTaskInline();
+  });
+}
+
+function triggerFabLongPress() {
+  if (!elements.folderModal.classList.contains('hidden')) {
+    return;
+  }
+  if (!state) {
+    return;
+  }
+  if (folderMenuState.visible) {
+    closeFolderMenu();
+  }
+  closeAppMenu();
+  if (navigator?.vibrate) {
+    try {
+      navigator.vibrate(50);
+    } catch (error) {
+      // ignore
+    }
+  }
+
+  if (currentScreen === 'tasks') {
+    if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+      return;
+    }
+    const parentId = state.ui.selectedFolderId === ALL_FOLDER_ID ? null : state.ui.selectedFolderId;
+    openFolderModal({ parentId });
+  } else {
+    openFolderModal({ parentId: null });
+  }
+}
+
+function createFolderViaShortcut() {
+  if (!elements.folderModal.classList.contains('hidden')) {
+    return;
+  }
+  if (!state) {
+    return;
+  }
+  if (folderMenuState.visible) {
+    return;
+  }
+  if (currentScreen === 'tasks') {
+    if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+      return;
+    }
+    const parentId = state.ui.selectedFolderId === ALL_FOLDER_ID ? null : state.ui.selectedFolderId;
+    openFolderModal({ parentId });
+    return;
+  }
+  openFolderModal({ parentId: null });
+}
+
+function createTaskViaShortcut() {
+  triggerFabShortPress();
+}
+
 function handleFolderClick(event) {
+  const taskItem = event.target.closest('.task-item');
+  if (taskItem) {
+    handleTaskListClick(event);
+    return;
+  }
+
+  const toggle = event.target.closest('.folder-toggle');
+  if (toggle) {
+    event.preventDefault();
+    const folderId = toggle.dataset.folderId;
+    if (folderId) {
+      toggleFolderExpansion(folderId);
+    }
+    return;
+  }
+
   const menuButton = event.target.closest('.folder-menu-button');
   if (menuButton) {
     event.stopPropagation();
     const folderId = menuButton.closest('.folder-item')?.dataset.folderId;
-    if (!folderId || folderId === ALL_FOLDER_ID) {
+    if (!folderId || PROTECTED_FOLDER_IDS.has(folderId)) {
       closeFolderMenu();
       return;
     }
@@ -1013,13 +2126,32 @@ function handleFolderClick(event) {
 }
 
 function handleFolderKeydown(event) {
-  if (event.key !== 'Enter' && event.key !== ' ') {
+  const taskItem = event.target.closest('.task-item');
+  if (taskItem) {
+    handleTaskKeydown(event);
     return;
   }
+
   const item = event.target.closest('.folder-item');
   if (!item) return;
-  event.preventDefault();
-  selectFolder(item.dataset.folderId, { openTasks: true });
+  const folderId = item.dataset.folderId;
+
+  if (event.key === 'ArrowRight') {
+    event.preventDefault();
+    toggleFolderExpansion(folderId, true);
+    return;
+  }
+
+  if (event.key === 'ArrowLeft') {
+    event.preventDefault();
+    toggleFolderExpansion(folderId, false);
+    return;
+  }
+
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    selectFolder(folderId, { openTasks: true });
+  }
 }
 
 function handleFolderMenuClick(event) {
@@ -1031,6 +2163,11 @@ function handleFolderMenuClick(event) {
   if (action === 'rename') {
     startFolderRename(folderMenuState.folderId);
   } else if (action === 'delete') {
+    if (PROTECTED_FOLDER_IDS.has(folderMenuState.folderId)) {
+      window.alert('Эту папку нельзя удалить');
+      closeFolderMenu();
+      return;
+    }
     deleteFolder(folderMenuState.folderId);
   }
   closeFolderMenu();
@@ -1048,33 +2185,70 @@ function handleDocumentClick(event) {
 }
 
 function startFolderRename(folderId) {
-  if (folderId === ALL_FOLDER_ID) {
+  if (!folderId || PROTECTED_FOLDER_IDS.has(folderId)) {
+    return;
+  }
+  const folder = getFolderById(folderId);
+  if (!folder) {
     return;
   }
   editingFolderId = folderId;
-  closeFolderMenu();
-  renderFolders();
+  openFolderModal({ parentId: folder.parentId ?? null, initialName: folder.name });
 }
 
 function deleteFolder(folderId) {
-  if (folderId === ALL_FOLDER_ID) {
-    return;
-  }
-  const index = state.folders.findIndex((item) => item.id === folderId);
-  if (index === -1) {
+  if (!folderId || PROTECTED_FOLDER_IDS.has(folderId)) {
     return;
   }
 
-  state.folders.splice(index, 1);
-  state.tasks = state.tasks.filter((task) => task.folderId !== folderId);
-  state.archivedTasks = state.archivedTasks.filter((task) => task.folderId !== folderId);
+  if (folderId === FOLDER_IDS.INBOX || folderId === FOLDER_IDS.PERSONAL) {
+    const confirmed = window.confirm('Удалить папку вместе с задачами?');
+    if (!confirmed) {
+      return;
+    }
+  }
 
-  if (state.ui.selectedFolderId === folderId) {
-    state.ui.selectedFolderId = ALL_FOLDER_ID;
+  const folderIndex = state.folders.findIndex((item) => item.id === folderId);
+  if (folderIndex === -1) {
+    return;
+  }
+
+  const parentId = getFolderParentId(folderId);
+  const descendants = new Set([folderId]);
+  const queue = [folderId];
+  const allFolders = state.folders.slice();
+
+  while (queue.length) {
+    const current = queue.shift();
+    allFolders.forEach((folder) => {
+      if (folder.parentId === current && !descendants.has(folder.id)) {
+        descendants.add(folder.id);
+        queue.push(folder.id);
+      }
+    });
+  }
+
+  state.folders = state.folders.filter((folder) => !descendants.has(folder.id));
+  state.tasks = state.tasks.filter((task) => !descendants.has(task.folderId));
+
+  if (descendants.has(state.ui.selectedFolderId)) {
+    const fallback = parentId && parentId !== ARCHIVE_FOLDER_ID
+      ? parentId
+      : (state.folders.some((folder) => folder.id === FOLDER_IDS.INBOX) ? FOLDER_IDS.INBOX : ALL_FOLDER_ID);
+    state.ui.selectedFolderId = fallback;
     showScreen('folders');
   }
 
-  ensureAllFolder(state);
+  if (descendants.has(editingFolderId)) {
+    editingFolderId = null;
+  }
+
+  state.ui.expandedFolderIds = Array.isArray(state.ui.expandedFolderIds)
+    ? state.ui.expandedFolderIds.filter((id) => !descendants.has(id))
+    : [ALL_FOLDER_ID];
+
+  ensureSystemFolders(state);
+  expandAncestors(state.ui.selectedFolderId);
   persistState();
   render();
 }
@@ -1088,6 +2262,10 @@ function openFolderMenu(folderId, anchor) {
   const menu = elements.folderMenu;
   menu.dataset.folderId = folderId;
   menu.classList.remove('hidden');
+  const deleteItem = menu.querySelector('[data-action="delete"]');
+  if (deleteItem) {
+    deleteItem.classList.toggle('hidden', PROTECTED_FOLDER_IDS.has(folderId));
+  }
   const rect = anchor.getBoundingClientRect();
   const width = menu.offsetWidth;
   menu.style.top = `${rect.bottom + window.scrollY + 6}px`;
@@ -1163,7 +2341,8 @@ async function handleLogoutAction(event) {
 function handleClearArchive(event) {
   event.preventDefault();
   closeAppMenu();
-  if (!state.archivedTasks.length) {
+  const hasCompleted = (state.archivedTasks?.length ?? 0) > 0 || state.tasks.some((task) => task.completed);
+  if (!hasCompleted) {
     return;
   }
 
@@ -1174,19 +2353,7 @@ function handleClearArchive(event) {
 
   state.archivedTasks = [];
   persistState();
-
-  if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
-    render();
-  }
-}
-
-function handleFloatingActionClick() {
-  closeAppMenu();
-  if (currentScreen === 'folders') {
-    openFolderModal();
-  } else if (currentScreen === 'tasks') {
-    handleAddTaskInline();
-  }
+  render();
 }
 
 function selectFolder(folderId, { openTasks = false, skipPersist = false } = {}) {
@@ -1194,41 +2361,82 @@ function selectFolder(folderId, { openTasks = false, skipPersist = false } = {})
     return;
   }
   state.ui.selectedFolderId = folderId;
+  expandAncestors(folderId);
+
+  const trackFolderContext = openTasks || currentScreen === 'tasks';
+  if (trackFolderContext) {
+    pendingRestoredContext = null;
+    uiContext.lastOpenedFolderId = folderId ?? null;
+    uiContext.lastScreen = 'tasks';
+    updateNavigationHistory(folderId ?? null);
+    if (uiContextReady && !openTasks && currentScreen === 'tasks') {
+      void persistUiContext();
+    }
+  }
+
   if (!skipPersist) {
     persistState();
   }
   render();
   if (openTasks) {
     showScreen('tasks');
+    renderTasksHeader(folderId);
+  } else if (trackFolderContext && currentScreen === 'tasks') {
+    updateUiContextForScreen('tasks');
+    renderTasksHeader(state.ui.selectedFolderId);
   }
 }
 
-function handleAddTaskInline() {
-  if (state.ui.selectedFolderId === ALL_FOLDER_ID || state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+function handleAddTaskInline({ forceComposerOnRoot = false } = {}) {
+  if (!state) {
     return;
   }
 
-  if (inlineComposer) {
+  if (currentScreen === 'tasks' && state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+    return;
+  }
+
+  const usingFoldersList = currentScreen === 'folders';
+  const targetList = usingFoldersList ? elements.folderList : elements.taskList;
+  const folderId = usingFoldersList ? null : state.ui.selectedFolderId;
+
+  if (inlineComposer && inlineComposer.targetList === targetList) {
     inlineComposer.input.focus({ preventScroll: true });
     inlineComposer.input.select();
     return;
   }
 
-  const composer = createInlineComposer();
+  if (usingFoldersList && !forceComposerOnRoot) {
+    return;
+  }
+
+  cancelInlineComposer(true);
+  const composer = createInlineComposer({
+    targetList,
+    placeholder: 'Введите задачу',
+    folderId
+  });
   inlineComposer = composer;
-  elements.taskList.appendChild(composer.element);
+
   composer.element.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  elements.emptyState.classList.remove('visible');
+
+  if (targetList === elements.taskList) {
+    elements.emptyState.classList.remove('visible');
+  }
+
   requestAnimationFrame(() => {
     composer.input.focus({ preventScroll: true });
   });
 }
 
-function createInlineComposer() {
+function createInlineComposer({ targetList = elements.taskList, placeholder = 'Введите задачу', folderId = null } = {}) {
   const item = document.createElement('li');
   item.className = 'entry-card task-item new-task';
   item.dataset.composer = 'true';
   item.setAttribute('draggable', 'false');
+  if (targetList === elements.folderList) {
+    item.classList.add('task-root-item');
+  }
 
   const checkbox = document.createElement('label');
   checkbox.className = 'checkbox';
@@ -1245,7 +2453,7 @@ function createInlineComposer() {
   input.type = 'text';
   input.className = 'task-inline-input';
   input.maxLength = 500;
-  input.placeholder = 'Введите задачу';
+  input.placeholder = placeholder;
 
   const confirmButton = document.createElement('button');
   confirmButton.type = 'button';
@@ -1289,8 +2497,9 @@ function createInlineComposer() {
   input.addEventListener('input', () => clearInvalid(input));
   input.addEventListener('blur', cancel);
   confirmButton.addEventListener('click', commit);
+  targetList.appendChild(item);
 
-  return { element: item, input };
+  return { element: item, input, targetList, folderId };
 }
 
 function cancelInlineComposer(force = false) {
@@ -1300,9 +2509,10 @@ function cancelInlineComposer(force = false) {
   if (!force && inlineComposer.input.value.trim()) {
     return;
   }
+  const targetList = inlineComposer.targetList;
   inlineComposer.element.remove();
   inlineComposer = null;
-  if (elements.taskList.children.length === 0) {
+  if (targetList === elements.taskList && elements.taskList.children.length === 0) {
     elements.emptyState.classList.add('visible');
   }
 }
@@ -1317,27 +2527,56 @@ function commitInlineTask(rawTitle, { continueEntry = false } = {}) {
     return;
   }
 
-  const composerElement = inlineComposer.element;
+  const context = inlineComposer;
   inlineComposer = null;
-  composerElement.remove();
+  context.element.remove();
 
-  createTask({ title: rawTitle });
+  const createdId = createTask({ text: rawTitle, folderId: context.folderId });
 
   if (continueEntry) {
     requestAnimationFrame(() => {
       handleAddTaskInline();
     });
   }
+
+  return createdId;
 }
 
 function handleTaskListClick(event) {
+  const menuButton = event.target.closest('.folder-menu-button');
+  if (menuButton) {
+    event.stopPropagation();
+    const folderId = menuButton.closest('.folder-item')?.dataset.folderId;
+    if (!folderId || PROTECTED_FOLDER_IDS.has(folderId)) {
+      closeFolderMenu();
+      return;
+    }
+    openFolderMenu(folderId, menuButton);
+    return;
+  }
+
+  const subfolderItem = event.target.closest('.subfolder-item');
+  if (subfolderItem) {
+    const folderId = subfolderItem.dataset.folderId;
+    if (folderId) {
+      selectFolder(folderId, { openTasks: true });
+    }
+    return;
+  }
+
   const removeButton = event.target.closest('.task-remove');
   if (removeButton) {
     removeButton.disabled = true;
     const item = removeButton.closest('.task-item');
     if (!item) return;
     const taskId = item.dataset.taskId;
-    removeTaskFromArchive(taskId, item);
+    if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+      removeCompletedTask(taskId, item);
+    } else {
+      requestAnimationFrame(() => {
+        removeButton.disabled = false;
+      });
+    }
     return;
   }
 
@@ -1355,28 +2594,64 @@ function handleTaskChange(event) {
   const item = event.target.closest('.task-item');
   if (!item) return;
   const taskId = item.dataset.taskId;
+  let task = state.tasks.find((entry) => entry.id === taskId);
+  let isArchivedContext = false;
 
-  if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
-    if (!event.target.checked) {
+  if (!task && currentScreen === 'tasks' && state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+    task = state.archivedTasks.find((entry) => entry.id === taskId);
+    isArchivedContext = true;
+  }
+
+  if (!task) {
+    render();
+    return;
+  }
+
+  if (currentScreen === 'tasks' && state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+    if (isArchivedContext && task.completed && !event.target.checked) {
       event.target.disabled = true;
-      restoreTaskFromArchive(taskId, item);
+      reopenTask(taskId, item);
     } else {
       event.target.checked = true;
     }
     return;
   }
 
-  event.target.disabled = true;
-  markTaskCompleted(taskId, item);
+  if (!task.completed && event.target.checked) {
+    event.target.disabled = true;
+    completeTask(taskId, item);
+  } else {
+    event.target.checked = false;
+  }
 }
 
 function handleTaskDblClick(event) {
+  const subfolderItem = event.target.closest('.subfolder-item');
+  if (subfolderItem) {
+    const folderId = subfolderItem.dataset.folderId;
+    if (folderId) {
+      selectFolder(folderId, { openTasks: true });
+    }
+    return;
+  }
   const titleNode = event.target.closest('.task-title');
   if (!titleNode) return;
   beginTaskEdit(titleNode);
 }
 
 function handleTaskKeydown(event) {
+  const subfolderItem = event.target.closest('.subfolder-item');
+  if (subfolderItem) {
+    const folderId = subfolderItem.dataset.folderId;
+    if (!folderId) {
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectFolder(folderId, { openTasks: true });
+    }
+    return;
+  }
   const titleNode = event.target.closest('.task-title');
   if (!titleNode) return;
   if (event.key === 'Enter') {
@@ -1386,7 +2661,7 @@ function handleTaskKeydown(event) {
 }
 
 function animateTaskCollapse(item, callback, duration = 520) {
-  const list = elements.taskList;
+  const list = item?.parentElement || elements.taskList;
   if (!list) {
     callback();
     return;
@@ -1428,11 +2703,31 @@ function beginTaskEdit(titleNode) {
 
   cancelInlineComposer(true);
 
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.value = task.title;
+  const input = document.createElement('textarea');
+  input.value = task.text ?? '';
   input.className = 'task-title-input';
-  input.maxLength = 500;
+  input.maxLength = 2000;
+  input.rows = 1;
+  input.style.minHeight = '0';
+  input.style.overflowY = 'hidden';
+
+  const computeBaseHeight = () => {
+    const styles = window.getComputedStyle(input);
+    const lineHeight = parseFloat(styles.lineHeight) || 0;
+    const paddingTop = parseFloat(styles.paddingTop) || 0;
+    const paddingBottom = parseFloat(styles.paddingBottom) || 0;
+    const borderTop = parseFloat(styles.borderTopWidth) || 0;
+    const borderBottom = parseFloat(styles.borderBottomWidth) || 0;
+    return Math.ceil(lineHeight + paddingTop + paddingBottom + borderTop + borderBottom);
+  };
+
+  const autoResize = () => {
+    const baseHeight = computeBaseHeight();
+    input.style.height = 'auto';
+    const scrollHeight = Math.ceil(input.scrollHeight);
+    const nextHeight = Math.max(scrollHeight, baseHeight);
+    input.style.height = `${nextHeight}px`;
+  };
 
   const finish = (shouldSave) => {
     if (shouldSave) {
@@ -1442,8 +2737,9 @@ function beginTaskEdit(titleNode) {
         input.focus({ preventScroll: true });
         return;
       }
-      if (newTitle !== task.title) {
-        task.title = newTitle;
+      if (newTitle !== task.text) {
+        task.text = newTitle;
+        task.updatedAt = Date.now();
         persistState();
       }
     }
@@ -1454,7 +2750,7 @@ function beginTaskEdit(titleNode) {
 
   const handleBlur = () => finish(true);
   const handleKey = (event) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       finish(true);
     } else if (event.key === 'Escape') {
@@ -1463,107 +2759,101 @@ function beginTaskEdit(titleNode) {
     }
   };
 
-  input.addEventListener('input', () => clearInvalid(input));
+  input.addEventListener('input', () => {
+    clearInvalid(input);
+    autoResize();
+  });
   input.addEventListener('blur', handleBlur);
   input.addEventListener('keydown', handleKey);
 
   titleNode.classList.add('editing');
   titleNode.after(input);
   input.focus({ preventScroll: true });
+  autoResize();
   input.select();
 }
 
 
-function restoreTaskFromArchive(taskId, item) {
-  const archivedIndex = state.archivedTasks.findIndex((task) => task.id === taskId);
-  if (archivedIndex === -1) {
+function completeTask(taskId, item) {
+  const index = state.tasks.findIndex((entry) => entry.id === taskId);
+  if (index === -1) {
     render();
     return;
   }
 
-  const archivedTask = state.archivedTasks.splice(archivedIndex, 1)[0];
+  const [task] = state.tasks.splice(index, 1);
 
-  item.classList.add('completed');
-  const archivedTitle = item.querySelector('.task-title');
-  archivedTitle?.classList.add('completed');
+  const title = item?.querySelector('.task-title');
+  title?.classList.add('completed');
+  item?.classList.add('completed');
 
   animateTaskCollapse(item, () => {
-    const folderId = archivedTask.folderId ?? 'inbox';
+    const timestamp = Date.now();
+    const archivedTask = {
+      ...task,
+      completed: true,
+      completedAt: timestamp,
+      updatedAt: timestamp
+    };
+    const existingIndex = state.archivedTasks.findIndex((entry) => entry.id === archivedTask.id);
+    if (existingIndex !== -1) {
+      state.archivedTasks.splice(existingIndex, 1);
+    }
+    state.archivedTasks.unshift(archivedTask);
+    persistState();
+    render();
+  });
+}
+
+function reopenTask(taskId, item) {
+  const index = state.archivedTasks.findIndex((entry) => entry.id === taskId);
+  if (index === -1) {
+    render();
+    return;
+  }
+
+  const [archivedTask] = state.archivedTasks.splice(index, 1);
+
+  item?.classList.add('completed');
+  const title = item?.querySelector('.task-title');
+  title?.classList.add('completed');
+
+  animateTaskCollapse(item, () => {
+    const timestamp = Date.now();
+    const folderId = archivedTask.folderId;
     const orders = state.tasks
-      .filter((task) => task.folderId === folderId)
-      .map((task) => task.order ?? 0);
+      .filter((entry) => entry.folderId === folderId && !entry.completed)
+      .map((entry) => entry.order ?? 0);
     const nextOrder = orders.length ? Math.max(...orders) + 1 : 0;
 
-    const restoredTask = {
+    state.tasks.push({
       ...archivedTask,
+      completed: false,
+      completedAt: undefined,
+      updatedAt: timestamp,
       order: nextOrder
-    };
-    delete restoredTask.completedAt;
-
-    state.tasks.push(restoredTask);
-
-        persistState();
+    });
+    persistState();
     render();
   });
 }
 
-function removeTaskFromArchive(taskId, item) {
-  const archivedIndex = state.archivedTasks.findIndex((task) => task.id === taskId);
-  if (archivedIndex === -1) {
+function removeCompletedTask(taskId, item) {
+  const index = state.archivedTasks.findIndex((entry) => entry.id === taskId);
+  if (index === -1) {
     render();
     return;
   }
 
-  state.archivedTasks.splice(archivedIndex, 1);
-
-  item.classList.add('completed');
-  const archivedTitle = item.querySelector('.task-title');
-  archivedTitle?.classList.add('completed');
+  item?.classList.add('completed');
+  const title = item?.querySelector('.task-title');
+  title?.classList.add('completed');
 
   animateTaskCollapse(item, () => {
-        persistState();
+    state.archivedTasks.splice(index, 1);
+    persistState();
     render();
   });
-}
-
-function markTaskCompleted(taskId, item) {
-  const task = state.tasks.find((entry) => entry.id === taskId);
-  if (!task) return;
-
-  const title = item.querySelector('.task-title');
-  title?.classList.add('completed');
-  item.classList.add('completed');
-
-  animateTaskCollapse(item, () => {
-    deleteTask(taskId);
-  });
-}
-
-function deleteTask(taskId) {
-  const taskIndex = state.tasks.findIndex((task) => task.id === taskId);
-  let removedTask = null;
-  if (taskIndex !== -1) {
-    removedTask = state.tasks.splice(taskIndex, 1)[0];
-  } else {
-    const archivedIndex = state.archivedTasks.findIndex((task) => task.id === taskId);
-    if (archivedIndex !== -1) {
-      state.archivedTasks.splice(archivedIndex, 1);
-      persistState();
-      render();
-      return;
-    }
-  }
-
-  if (removedTask) {
-    state.archivedTasks.unshift({
-      ...removedTask,
-      completedAt: Date.now()
-    });
-      } else {
-      }
-
-  persistState();
-  render();
 }
 
 function handleDragStart(event) {
@@ -1719,6 +3009,16 @@ function handleEmptyState(hasTasks) {
 
     const now = Date.now();
     const existingDeadline = getEmptyStateDeadline(selectedFolderId);
+    const canShowSuccess = shouldShowSuccessIllustration(selectedFolderId);
+
+    if (!canShowSuccess) {
+      clearEmptyStateTimer();
+      emptyStateExpired = true;
+      showDefaultEmptyStateMessage();
+      setEmptyStateDeadline(selectedFolderId, null);
+      return;
+    }
+
     if (existingDeadline === null) {
       emptyStateExpired = false;
       setEmptyStateDeadline(selectedFolderId, now + EMPTY_STATE_TIMEOUT);
@@ -1772,114 +3072,278 @@ function handleEmptyState(hasTasks) {
 
 function renderFolders() {
   closeFolderMenu();
+  if (inlineComposer?.targetList === elements.folderList) {
+    inlineComposer = null;
+  }
   elements.folderList.innerHTML = '';
 
-  const counts = state.tasks.reduce((acc, task) => {
-    acc[task.folderId] = (acc[task.folderId] ?? 0) + 1;
-    acc[ALL_FOLDER_ID] = (acc[ALL_FOLDER_ID] ?? 0) + 1;
-    return acc;
-  }, {});
+  if (currentScreen === 'folders') {
+    renderRootFolders();
+    return;
+  }
 
-  counts[ARCHIVE_FOLDER_ID] = state.archivedTasks.length;
-
-  const fragment = document.createDocumentFragment();
-  
-  // Check settings
   const showArchive = settingsManager.get('showArchive');
   const showCounter = settingsManager.get('showCounter');
 
-  state.folders.forEach((folder) => {
-    // Skip archive folder if showArchive setting is false
-    if (folder.id === ARCHIVE_FOLDER_ID && !showArchive) {
+  const folders = state.folders.slice();
+  const { counts } = computeFolderTaskCounts();
+
+  const childrenMap = new Map();
+  folders.forEach((folder) => {
+    const parentKey = folder.parentId ?? null;
+    if (!childrenMap.has(parentKey)) {
+      childrenMap.set(parentKey, []);
+    }
+    childrenMap.get(parentKey).push(folder);
+  });
+
+  childrenMap.forEach((list) => {
+    list.sort((a, b) => {
+      const orderA = a.order ?? 0;
+      const orderB = b.order ?? 0;
+      if (orderA === orderB) {
+        return a.name.localeCompare(b.name, 'ru');
+      }
+      return orderA - orderB;
+    });
+  });
+
+  const fragment = document.createDocumentFragment();
+
+  const renderBranch = (parentId, depth) => {
+    const children = childrenMap.get(parentId) || [];
+    children.forEach((folder) => {
+      if (!showArchive && folder.id === ARCHIVE_FOLDER_ID) {
+        return;
+      }
+
+      const node = elements.folderTemplate.content.firstElementChild.cloneNode(true);
+      node.dataset.folderId = folder.id;
+      node.dataset.depth = String(depth);
+      node.style.setProperty('--depth', depth);
+
+      const isSelected = state.ui.selectedFolderId === folder.id;
+      node.classList.toggle('active', currentScreen === 'tasks' && isSelected);
+      node.classList.toggle('is-selected', isSelected);
+      const isExpanded = state.ui.expandedFolderIds.includes(folder.id);
+      node.classList.toggle('is-expanded', isExpanded);
+      node.setAttribute('aria-expanded', childrenMap.get(folder.id)?.length ? String(isExpanded) : 'false');
+
+      const content = node.querySelector('.folder-content');
+      const nameSpan = node.querySelector('.folder-name');
+      const countSpan = node.querySelector('.folder-count');
+      const menuButton = node.querySelector('.folder-menu-button');
+
+      nameSpan.textContent = folder.name;
+
+      const totalCount = counts.get(folder.id) ?? 0;
+      countSpan.textContent = String(totalCount);
+      if (!showCounter || totalCount === 0) {
+        countSpan.style.display = 'none';
+      } else {
+        countSpan.style.display = '';
+      }
+
+      const childrenCount = (childrenMap.get(folder.id) || []).length;
+      if (childrenCount > 0) {
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'folder-toggle';
+        toggle.dataset.folderId = folder.id;
+        toggle.classList.toggle('is-expanded', isExpanded);
+        toggle.setAttribute('aria-label', isExpanded ? 'Свернуть папку' : 'Раскрыть папку');
+        toggle.setAttribute('aria-expanded', String(isExpanded));
+        content.prepend(toggle);
+        node.classList.add('has-children');
+      } else {
+        node.classList.add('leaf');
+      }
+
+      const isMenuHidden = folder.id === ALL_FOLDER_ID || folder.id === ARCHIVE_FOLDER_ID;
+      menuButton.classList.toggle('hidden', isMenuHidden);
+
+      if (editingFolderId === folder.id) {
+        node.classList.add('is-editing');
+        menuButton.classList.add('hidden');
+
+        const input = document.createElement('input');
+        input.className = 'folder-edit-input';
+        input.value = folder.name;
+        input.maxLength = 100;
+
+        const finish = (shouldSave) => {
+          if (shouldSave) {
+            const newTitle = input.value.trim();
+            if (!newTitle) {
+              flagInvalid(input);
+              input.focus({ preventScroll: true });
+              return;
+            }
+            if (newTitle !== folder.name) {
+              folder.name = newTitle;
+              folder.updatedAt = Date.now();
+              ensureSystemFolders(state);
+              persistState();
+            }
+          }
+          input.removeEventListener('blur', handleBlur);
+          input.removeEventListener('keydown', handleKey);
+          editingFolderId = null;
+          render();
+        };
+
+        const handleBlur = () => finish(true);
+        const handleKey = (event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            finish(true);
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            editingFolderId = null;
+            renderFolders();
+          }
+        };
+
+        input.addEventListener('input', () => clearInvalid(input));
+        input.addEventListener('blur', handleBlur);
+        input.addEventListener('keydown', handleKey);
+
+        content.innerHTML = '';
+        content.append(input, countSpan);
+
+        requestAnimationFrame(() => {
+          input.focus({ preventScroll: true });
+          input.select();
+        });
+      }
+
+      fragment.appendChild(node);
+
+      if (childrenCount > 0 && isExpanded) {
+        renderBranch(folder.id, depth + 1);
+      }
+    });
+  };
+
+  renderBranch(null, 0);
+  elements.folderList.appendChild(fragment);
+}
+
+function renderRootFolders() {
+  const fragment = document.createDocumentFragment();
+  const showArchive = settingsManager.get('showArchive');
+  const showCounter = settingsManager.get('showCounter');
+  const { counts } = computeFolderTaskCounts();
+
+  const rootFolders = state.folders.filter((folder) => {
+    if (folder.id === ALL_FOLDER_ID) {
+      return false;
+    }
+    if (folder.parentId === null) {
+      return true;
+    }
+    return folder.parentId === ALL_FOLDER_ID;
+  }).sort((a, b) => {
+    const orderA = a.order ?? 0;
+    const orderB = b.order ?? 0;
+    if (orderA === orderB) {
+      return a.name.localeCompare(b.name, 'ru');
+    }
+    return orderA - orderB;
+  });
+
+  rootFolders.forEach((folder) => {
+    if (!showArchive && folder.id === ARCHIVE_FOLDER_ID) {
       return;
     }
-    
+
     const node = elements.folderTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.folderId = folder.id;
-    const highlight = currentScreen === 'tasks' && state.ui.selectedFolderId === folder.id;
-    node.classList.toggle('active', highlight);
+    node.dataset.depth = '0';
+    node.classList.remove('has-children', 'leaf', 'is-expanded');
+    node.style.setProperty('--depth', 0);
+    node.classList.toggle('is-selected', state.ui.selectedFolderId === folder.id && currentScreen === 'tasks');
 
     const content = node.querySelector('.folder-content');
     const nameSpan = node.querySelector('.folder-name');
     const countSpan = node.querySelector('.folder-count');
     const menuButton = node.querySelector('.folder-menu-button');
+    const toggle = node.querySelector('.folder-toggle');
 
-    const folderCount = counts[folder.id] ?? 0;
-    countSpan.textContent = folderCount;
-    
-    // Show/hide counter based on settings
-    if (!showCounter || folderCount === 0) {
-      countSpan.style.display = 'none';
-    } else {
-      countSpan.style.display = '';
+    if (toggle) {
+      toggle.remove();
     }
 
-    if (folder.id === ALL_FOLDER_ID || folder.id === ARCHIVE_FOLDER_ID) {
-      menuButton.classList.add('hidden');
-    } else {
-      menuButton.classList.remove('hidden');
+    nameSpan.textContent = folder.name;
+
+    const totalCount = counts.get(folder.id) ?? 0;
+    countSpan.textContent = String(totalCount);
+    countSpan.style.display = !showCounter || totalCount === 0 ? 'none' : '';
+
+    const hideMenu = PROTECTED_FOLDER_IDS.has(folder.id);
+    menuButton.classList.toggle('hidden', hideMenu);
+
+    fragment.appendChild(node);
+  });
+
+  const rootTasks = state.tasks
+    .filter((task) => !task.completed && !task.folderId)
+    .sort((a, b) => {
+      const orderA = Number.isFinite(a.order) ? a.order : 0;
+      const orderB = Number.isFinite(b.order) ? b.order : 0;
+      if (orderA === orderB) {
+        return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+      }
+      return orderA - orderB;
+    });
+
+  rootTasks.forEach((task) => {
+    const node = elements.taskTemplate.content.firstElementChild.cloneNode(true);
+    node.dataset.taskId = task.id;
+    node.dataset.composer = 'false';
+    node.classList.add('task-root-item');
+    node.setAttribute('draggable', 'false');
+    node.classList.remove('is-archive');
+
+    const title = node.querySelector('.task-title');
+    const folderLabel = node.querySelector('.task-folder-label');
+    const checkbox = node.querySelector('.checkbox input');
+    const removeButton = node.querySelector('.task-remove');
+
+    if (removeButton) {
+      removeButton.classList.add('hidden');
     }
 
-    if (editingFolderId === folder.id) {
-      node.classList.add('is-editing');
-      menuButton.classList.add('hidden');
+    renderTaskTitle(title, task.text);
+    folderLabel.textContent = '';
+    node.classList.remove('show-folder');
 
-      const input = document.createElement('input');
-      input.className = 'folder-edit-input';
-      input.value = folder.name;
-      input.maxLength = 60;
-
-      const finish = (shouldSave) => {
-        if (shouldSave) {
-          const newTitle = input.value.trim();
-          if (!newTitle) {
-            flagInvalid(input);
-            input.focus({ preventScroll: true });
-            return;
-          }
-          if (newTitle !== folder.name) {
-            folder.name = newTitle;
-            ensureAllFolder(state);
-            persistState();
-          }
-        }
-        input.removeEventListener('blur', handleBlur);
-        input.removeEventListener('keydown', handleKey);
-        editingFolderId = null;
-        render();
-      };
-
-      const handleBlur = () => finish(true);
-      const handleKey = (event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          finish(true);
-        } else if (event.key === 'Escape') {
-          event.preventDefault();
-          editingFolderId = null;
-          renderFolders();
-        }
-      };
-
-      input.addEventListener('input', () => clearInvalid(input));
-      input.addEventListener('blur', handleBlur);
-      input.addEventListener('keydown', handleKey);
-
-      content.innerHTML = '';
-      content.append(input, countSpan);
-
-      requestAnimationFrame(() => {
-        input.focus({ preventScroll: true });
-        input.select();
-      });
-    } else {
-      nameSpan.textContent = folder.name;
-    }
+    checkbox.checked = Boolean(task.completed);
+    checkbox.disabled = false;
 
     fragment.appendChild(node);
   });
 
   elements.folderList.appendChild(fragment);
+}
+
+function toggleFolderExpansion(folderId, expand) {
+  if (!folderId || folderId === ARCHIVE_FOLDER_ID) {
+    return;
+  }
+
+  const expanded = new Set(Array.isArray(state.ui.expandedFolderIds) ? state.ui.expandedFolderIds : [ALL_FOLDER_ID]);
+  const shouldExpand = typeof expand === 'boolean' ? expand : !expanded.has(folderId);
+
+  if (shouldExpand) {
+    expanded.add(folderId);
+  } else if (folderId !== ALL_FOLDER_ID) {
+    expanded.delete(folderId);
+  }
+
+  state.ui.expandedFolderIds = Array.from(expanded);
+  persistState();
+  renderFolders();
 }
 
 function renderTasks() {
@@ -1891,14 +3355,52 @@ function renderTasks() {
 
   let tasks = [];
   const showFolderLabels = isAllFolder || selectedFolder === ARCHIVE_FOLDER_ID;
+  const showCounter = settingsManager.get('showCounter');
+  const childFolders = state.folders
+    .filter((folder) => {
+      if (selectedFolder === ARCHIVE_FOLDER_ID) {
+        return false;
+      }
+      if (folder.id === ARCHIVE_FOLDER_ID) {
+        return false;
+      }
+      if (selectedFolder !== ALL_FOLDER_ID && PROTECTED_FOLDER_IDS.has(folder.id)) {
+        return false;
+      }
+      if (selectedFolder === ALL_FOLDER_ID) {
+        return folder.parentId === null || folder.parentId === ALL_FOLDER_ID;
+      }
+      return folder.parentId === selectedFolder;
+    })
+    .sort((a, b) => {
+      const orderA = Number.isFinite(a.order) ? a.order : 0;
+      const orderB = Number.isFinite(b.order) ? b.order : 0;
+      if (orderA === orderB) {
+        return a.name.localeCompare(b.name, 'ru');
+      }
+      return orderA - orderB;
+    });
+  const { counts } = computeFolderTaskCounts();
 
   if (selectedFolder === ARCHIVE_FOLDER_ID) {
-    tasks = state.archivedTasks
+    tasks = (state.archivedTasks ?? [])
       .slice()
-      .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
+      .sort((a, b) => {
+        const completedA = Number.isFinite(a.completedAt) ? a.completedAt : (a.updatedAt ?? 0);
+        const completedB = Number.isFinite(b.completedAt) ? b.completedAt : (b.updatedAt ?? 0);
+        return completedB - completedA;
+      });
   } else {
     tasks = state.tasks
-      .filter((task) => isAllFolder || task.folderId === selectedFolder)
+      .filter((task) => {
+        if (task.completed) {
+          return false;
+        }
+        if (isAllFolder) {
+          return true;
+        }
+        return task.folderId === selectedFolder;
+      })
       .sort((a, b) => {
         const orderA = a.order ?? 0;
         const orderB = b.order ?? 0;
@@ -1910,23 +3412,59 @@ function renderTasks() {
   }
 
   const hadTasks = tasks.length > 0;
-  handleEmptyState(hadTasks);
+  handleEmptyState(hadTasks || childFolders.length > 0);
 
   const fragment = document.createDocumentFragment();
+
+  if (childFolders.length) {
+    childFolders.forEach((folder) => {
+      const node = elements.folderTemplate.content.firstElementChild.cloneNode(true);
+      node.dataset.folderId = folder.id;
+      node.classList.add('subfolder-item');
+      node.dataset.depth = '1';
+      node.setAttribute('draggable', 'false');
+      node.style.setProperty('--depth', 1);
+
+      const content = node.querySelector('.folder-content');
+      const nameSpan = node.querySelector('.folder-name');
+      const countSpan = node.querySelector('.folder-count');
+      const menuButton = node.querySelector('.folder-menu-button');
+      const toggle = node.querySelector('.folder-toggle');
+
+      if (toggle) {
+        toggle.remove();
+      }
+
+      nameSpan.textContent = folder.name;
+      const totalCount = counts.get(folder.id) ?? 0;
+      countSpan.textContent = String(totalCount);
+      if (!showCounter || totalCount === 0) {
+        countSpan.style.display = 'none';
+      } else {
+        countSpan.style.display = '';
+      }
+
+      const hideMenu = PROTECTED_FOLDER_IDS.has(folder.id);
+      menuButton.classList.toggle('hidden', hideMenu);
+
+      fragment.appendChild(node);
+    });
+  }
 
   tasks.forEach((task) => {
     const node = elements.taskTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.taskId = task.id;
-    const isReadonly = isAllFolder || selectedFolder === ARCHIVE_FOLDER_ID;
+    const isArchiveView = selectedFolder === ARCHIVE_FOLDER_ID;
+    const isReadonly = isAllFolder || isArchiveView;
     node.classList.toggle('is-readonly', isReadonly);
-    node.classList.toggle('is-archive', selectedFolder === ARCHIVE_FOLDER_ID);
+    node.classList.toggle('is-archive', isArchiveView);
     node.setAttribute('draggable', isReadonly ? 'false' : 'true');
 
     const title = node.querySelector('.task-title');
     const folderLabel = node.querySelector('.task-folder-label');
     const checkbox = node.querySelector('.checkbox input');
 
-    title.textContent = task.title;
+    renderTaskTitle(title, task.text);
     if (showFolderLabels) {
       folderLabel.textContent = getFolderName(task.folderId);
       node.classList.add('show-folder');
@@ -1935,21 +3473,18 @@ function renderTasks() {
       node.classList.remove('show-folder');
     }
 
-    if (selectedFolder === ARCHIVE_FOLDER_ID) {
-      checkbox.checked = true;
-      checkbox.disabled = false;
-    } else {
-      checkbox.checked = false;
-      checkbox.disabled = false;
-    }
+    checkbox.checked = Boolean(task.completed);
+    checkbox.disabled = false;
+    node.classList.toggle('completed', !isArchiveView && Boolean(task.completed));
 
     fragment.appendChild(node);
   });
 
   elements.taskList.appendChild(fragment);
 
-  const folder = state.folders.find((item) => item.id === selectedFolder);
-  elements.tasksHeaderTitle.textContent = folder?.name ?? 'Папка';
+  if (currentScreen === 'tasks') {
+    renderTasksHeader(selectedFolder);
+  }
 
   if (lastCreatedTaskId) {
     focusTaskTitle(lastCreatedTaskId);
@@ -1967,15 +3502,15 @@ function updateFloatingAction() {
 
   if (currentScreen === 'folders') {
     fab.classList.remove('is-hidden');
-    fab.dataset.mode = 'folder';
-    fab.setAttribute('aria-label', 'Создать папку');
+    fab.dataset.mode = 'task';
+    fab.setAttribute('aria-label', 'Добавить задачу');
     fab.textContent = '＋';
     return;
   }
 
   if (currentScreen === 'tasks') {
     const selectedFolder = state.ui.selectedFolderId;
-    const disableAdd = selectedFolder === ALL_FOLDER_ID || selectedFolder === ARCHIVE_FOLDER_ID;
+    const disableAdd = selectedFolder === ARCHIVE_FOLDER_ID;
     if (disableAdd) {
       fab.classList.add('is-hidden');
     } else {
@@ -2011,6 +3546,9 @@ function updateThemeControls() {
 }
 
 function getFolderName(folderId) {
+  if (!folderId) {
+    return 'Без папки';
+  }
   return state.folders.find((folder) => folder.id === folderId)?.name ?? 'Папка';
 }
 
@@ -2030,23 +3568,39 @@ function clearInvalid(input) {
 }
 
 function persistState() {
-  ensureAllFolder(state);
+  ensureSystemFolders(state);
   saveState(state);
 }
 
-function createTask({ title }) {
-  const folderId = state.ui.selectedFolderId;
+function createTask({ text, folderId = undefined }) {
+  const normalizedText = typeof text === 'string' ? text.trim() : '';
+  if (!normalizedText) {
+    return null;
+  }
+  let targetFolderId = folderId;
+  if (targetFolderId === undefined) {
+    const selectedFolder = state.ui.selectedFolderId;
+    targetFolderId = (selectedFolder && selectedFolder !== ALL_FOLDER_ID && selectedFolder !== ARCHIVE_FOLDER_ID)
+      ? selectedFolder
+      : null;
+  }
+  if (targetFolderId === ARCHIVE_FOLDER_ID || targetFolderId === ALL_FOLDER_ID) {
+    targetFolderId = null;
+  }
   const orders = state.tasks
-    .filter((task) => task.folderId === folderId)
+    .filter((task) => task.folderId === targetFolderId && !task.completed)
     .map((task) => task.order ?? 0);
   const nextOrder = orders.length ? Math.max(...orders) + 1 : 0;
 
   const id = uid();
+  const now = Date.now();
   state.tasks.push({
     id,
-    title,
-    folderId,
-    createdAt: Date.now(),
+    text: normalizedText,
+    folderId: targetFolderId,
+    completed: false,
+    createdAt: now,
+    updatedAt: now,
     order: nextOrder
   });
 
@@ -2114,7 +3668,8 @@ if (elements.showArchiveToggle) {
 
 if (elements.clearArchiveButton) {
   elements.clearArchiveButton.addEventListener('click', () => {
-    if (!state.archivedTasks.length) {
+    const hasCompleted = (state.archivedTasks?.length ?? 0) > 0 || state.tasks.some((task) => task.completed);
+    if (!hasCompleted) {
       return;
     }
     const confirmed = window.confirm('Очистить архив задач?');
@@ -2123,9 +3678,7 @@ if (elements.clearArchiveButton) {
     }
     state.archivedTasks = [];
     persistState();
-    if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
-      render();
-    }
+    render();
   });
 }
 

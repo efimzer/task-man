@@ -53,6 +53,7 @@ export function createSyncManager({
 
   const baseUrl = normalizeBaseUrl(syncConfig.baseUrl);
   const stateEndpoint = `${baseUrl}/state`;
+  const healthEndpoint = `${baseUrl}/health`;
 
   const parsedDebounce = Number(syncConfig.pushDebounceMs);
   const debounceMs = Number.isFinite(parsedDebounce) ? Math.max(50, parsedDebounce) : DEFAULT_DEBOUNCE;
@@ -71,6 +72,7 @@ export function createSyncManager({
 
   let pushTimer = null;
   let pollTimer = null;
+  let keepAliveTimer = null;
   let isPushing = false;
   let isPulling = false;
   let lastSyncedVersion = null;
@@ -113,7 +115,24 @@ export function createSyncManager({
     return response;
   }
 
-  async function pullLatest({ skipIfUnchanged = false } = {}) {
+  function scheduleKeepAlive() {
+    const interval = Number(syncConfig.keepAliveIntervalMs);
+    if (!Number.isFinite(interval) || interval <= 0) {
+      return;
+    }
+    if (keepAliveTimer) {
+      return;
+    }
+    keepAliveTimer = setInterval(async () => {
+      try {
+        await authorizedFetch(healthEndpoint, { method: 'GET' });
+      } catch (error) {
+        console.warn('Todo sync: keep-alive ping failed', error);
+      }
+    }, interval);
+  }
+
+  async function pullLatest({ skipIfUnchanged = false, ignoreKeepAlive = false } = {}) {
     if (isPulling || isPushing) {
       return { applied: false, notFound: false, skipped: true };
     }
@@ -167,6 +186,9 @@ export function createSyncManager({
     } catch (error) {
       console.warn('Todo sync: unable to pull remote state', error);
       setStatus({ error });
+      if (!ignoreKeepAlive) {
+        scheduleKeepAlive();
+      }
       return { applied: false, notFound: false, error };
     } finally {
       isPulling = false;
@@ -240,6 +262,7 @@ export function createSyncManager({
     } catch (error) {
       console.warn('Todo sync: unable to push remote state', error);
       setStatus({ error });
+      scheduleKeepAlive();
       return false;
     } finally {
       isPushing = false;
@@ -266,16 +289,22 @@ export function createSyncManager({
     }
 
     pollTimer = setInterval(() => {
-      pullLatest({ skipIfUnchanged: true }).catch((error) => {
+      pullLatest({ skipIfUnchanged: true, ignoreKeepAlive: true }).catch((error) => {
         console.warn('Todo sync: polling pull failed', error);
       });
     }, pollInterval);
+
+    scheduleKeepAlive();
   }
 
   function stopPolling() {
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
+    }
+    if (keepAliveTimer) {
+      clearInterval(keepAliveTimer);
+      keepAliveTimer = null;
     }
   }
 
@@ -288,6 +317,8 @@ export function createSyncManager({
       error: lastError ?? undefined
     };
   }
+
+  scheduleKeepAlive();
 
   return {
     enabled: true,

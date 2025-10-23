@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "dev:server": "node --watch server/index.js"
+    "dev:server": "node --watch server/index.js",
+    "keep-alive": "node worker/keep-alive.js"
   },
   "dependencies": {
     "express": "^4.18.2",
