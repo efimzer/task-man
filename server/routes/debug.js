@@ -47,7 +47,10 @@ export function createDebugRouter({ userService, sessionService, stateService })
       state: {
         folders: stateDoc?.folders?.length || 0,
         tasks: stateDoc?.tasks?.length || 0,
-        archivedTasks: stateDoc?.archivedTasks?.length || 0,
+        archivedTasks: Array.isArray(stateDoc?.archivedTasks) ? stateDoc.archivedTasks.length : 0,
+        completedTasks: Array.isArray(stateDoc?.tasks)
+          ? stateDoc.tasks.filter((task) => task?.completed).length
+          : 0,
         lastUpdate: stateDoc?.meta?.updatedAt ? new Date(stateDoc.meta.updatedAt).toISOString() : null
       }
     });
