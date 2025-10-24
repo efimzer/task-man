@@ -1151,7 +1151,10 @@ function handlePullMove(event) {
     return;
   }
 
-  const damped = deltaY * 0.65;
+  const clampedY = Math.max(0, Math.min(PULL_REFRESH_MAX * 2, deltaY));
+  const ratio = Math.min(1, clampedY / PULL_REFRESH_THRESHOLD);
+  const easing = 1 - Math.pow(1 - ratio, 2);
+  const damped = clampedY * (0.45 - easing * 0.25);
   const offset = Math.min(PULL_REFRESH_MAX, damped);
   setPullToRefreshOffset(offset);
   setPullToRefreshReady(offset >= PULL_REFRESH_THRESHOLD);
