@@ -971,11 +971,27 @@ function updatePullToRefreshLabel(text) {
   }
 }
 
-function setPullToRefreshOffset(value) {
+function setPullToRefreshOffset(value, { smooth = false } = {}) {
   const offset = Math.max(0, Math.min(PULL_REFRESH_MAX, value));
   pullToRefreshState.currentOffset = offset;
-  if (elements.pullToRefresh) {
-    elements.pullToRefresh.style.setProperty('--pull-offset', `${offset}px`);
+  if (elements.appShell) {
+    if (smooth) {
+      elements.appShell.style.transition = 'transform 0.26s cubic-bezier(0.33, 1, 0.68, 1)';
+    } else if (offset === 0) {
+      elements.appShell.style.transition = '';
+    }
+    if (offset > 0.5) {
+      elements.appShell.style.transform = `translate3d(0, ${offset}px, 0)`;
+    } else {
+      elements.appShell.style.transform = '';
+    }
+    if (smooth) {
+      setTimeout(() => {
+        if (elements.appShell) {
+          elements.appShell.style.transition = '';
+        }
+      }, 280);
+    }
   }
   if (!pullToRefreshState.syncing && elements.pullToRefreshSpinner) {
     const progress = Math.min(1, offset / PULL_REFRESH_THRESHOLD);
@@ -1016,7 +1032,7 @@ function resetPullToRefresh({ immediate = false } = {}) {
   pullToRefreshState.syncing = false;
   const indicator = elements.pullToRefresh;
   updatePullToRefreshLabel(PULL_REFRESH_DEFAULT_TEXT);
-  setPullToRefreshOffset(0);
+  setPullToRefreshOffset(0, { smooth: !immediate });
   if (elements.pullToRefreshSpinner) {
     elements.pullToRefreshSpinner.style.transform = 'rotate(0deg)';
   }
@@ -1061,7 +1077,7 @@ function completePullToRefresh({ success }) {
     elements.pullToRefresh.classList.add('is-error');
     updatePullToRefreshLabel(PULL_REFRESH_ERROR_TEXT);
   }
-  setPullToRefreshOffset(success ? PULL_REFRESH_THRESHOLD * 0.7 : 0);
+  setPullToRefreshOffset(success ? PULL_REFRESH_THRESHOLD * 0.7 : 0, { smooth: true });
   setTimeout(() => {
     resetPullToRefresh({ immediate: false });
   }, success ? PULL_REFRESH_RESET_DELAY : PULL_REFRESH_RESET_DELAY * 2);
@@ -1470,6 +1486,7 @@ function updateSyncStatusLabel({ syncing = false } = {}) {
 }
 
 const elements = {
+  appShell: document.querySelector('.app-shell'),
   screenFolders: document.getElementById('screenFolders'),
   screenTasks: document.getElementById('screenTasks'),
   folderList: document.getElementById('folderList'),
