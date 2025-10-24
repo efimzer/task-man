@@ -1135,6 +1135,13 @@ function handlePullMove(event) {
     if (deltaY > 0 && deltaY > deltaX) {
       pullToRefreshState.pulling = true;
       showPullToRefreshIndicator();
+      if (navigator?.vibrate) {
+        try {
+          navigator.vibrate(6);
+        } catch (error) {
+          // ignore vibration errors
+        }
+      }
     } else if (deltaY < 0) {
       pullToRefreshState.active = false;
       return;
@@ -1151,10 +1158,9 @@ function handlePullMove(event) {
     return;
   }
 
-  const clampedY = Math.max(0, Math.min(PULL_REFRESH_MAX * 2, deltaY));
-  const ratio = Math.min(1, clampedY / PULL_REFRESH_THRESHOLD);
-  const easing = 1 - Math.pow(1 - ratio, 2);
-  const damped = clampedY * (0.45 - easing * 0.25);
+  const clampedY = Math.max(0, Math.min(PULL_REFRESH_MAX * 3, deltaY));
+  const easing = 1 - Math.exp(-clampedY / (PULL_REFRESH_THRESHOLD * 0.9));
+  const damped = Math.min(PULL_REFRESH_MAX, easing * PULL_REFRESH_MAX);
   const offset = Math.min(PULL_REFRESH_MAX, damped);
   setPullToRefreshOffset(offset);
   setPullToRefreshReady(offset >= PULL_REFRESH_THRESHOLD);
