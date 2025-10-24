@@ -90,7 +90,7 @@ body {
 
 .pull-refresh.is-syncing {
   opacity: 1;
-  transform: translate3d(-50%, calc(-140% + var(--pull-offset, 0px)), 0);
+  transform: translate3d(-50%, calc(-160% + var(--pull-offset, 0px)), 0);
 }
 
 .pull-refresh.is-syncing .pull-refresh-spinner {
