@@ -35,13 +35,14 @@ body {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.25s ease;
+  will-change: transform;
 }
 
 .pull-refresh {
   position: fixed;
   top: 18px;
   left: 50%;
-  transform: translate3d(-50%, calc(-140% + var(--pull-offset, 0px)), 0);
+  transform: translate3d(-50%, -140%, 0);
   background: var(--surface-raised, rgba(255, 255, 255, 0.92));
   border: 1px solid var(--glass-border);
   box-shadow: var(--shadow-soft);
@@ -90,7 +91,7 @@ body {
 
 .pull-refresh.is-syncing {
   opacity: 1;
-  transform: translate3d(-50%, calc(-160% + var(--pull-offset, 0px)), 0);
+  transform: translate3d(-50%, -120%, 0);
 }
 
 .pull-refresh.is-syncing .pull-refresh-spinner {
