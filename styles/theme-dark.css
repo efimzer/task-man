@@ -2,7 +2,7 @@
   :root {
     color-scheme: dark;
     /* --bg-primary: linear-gradient(160deg, rgba(16, 22, 45, 0.8), rgba(29, 35, 61, 0.65)); */
-    --bg-primary: rgba(16, 22, 45, 0.8);
+    --bg-primary: rgba(36, 38, 46, 0.8);
     --glass-surface: rgba(49, 52, 70, 0.5);
     --glass-surface-strong: rgba(44, 48, 66, 0.6);
     --glass-border: rgba(132, 139, 168, 0.14);
