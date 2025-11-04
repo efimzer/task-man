@@ -3,23 +3,34 @@ name: 🚀 Deploy to VPS
 on:
   push:
     branches:
-      - main #любая ветка
+      - main  # деплой запускается при пуше в main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Test SSH Connection
+      - name: Deploy to VPS via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            hostname
-            whoami
+            cd /opt/task-man
+            echo "🔄 Pulling latest changes..."
+            git fetch --all
+            git reset --hard origin/main
+
+            echo "📦 Installing dependencies..."
+            cd server
+            npm ci --omit=dev
+
+            echo "🚀 Restarting PM2 process..."
+            pm2 restart todo || pm2 start index.js --name todo
+
+            echo "✅ Deployment complete!"
             pm2 list
