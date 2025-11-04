@@ -1,5 +1,5 @@
-const COOKIE_DOMAIN = 'task-man-rf22.onrender.com';
-const COOKIE_URL = 'https://task-man-rf22.onrender.com';
+const COOKIE_DOMAIN = 'gofima.online';
+const COOKIE_URL = 'https://gofima.online/web/';
 const TOKEN_COOKIE_NAME = 'todo_token'; // Исправлено: было 'token', должно быть 'todo_token'
 const STORAGE_TOKEN_KEY = 'todoAuthToken';
 const STORAGE_USER_KEY = 'todoAuthUser';

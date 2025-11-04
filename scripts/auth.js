@@ -1,6 +1,6 @@
 const STORAGE_TOKEN_KEY = 'todoAuthToken';
 const STORAGE_USER_KEY = 'todoAuthUser';
-const COOKIE_URL = 'https://task-man-rf22.onrender.com';
+const COOKIE_URL = 'https://gofima.online/web/';
 const TOKEN_COOKIE_NAME = 'todo_token'; // Исправлено: было 'token', должно быть 'todo_token'
 const BROWSER_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 дней
 
