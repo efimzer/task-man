@@ -30,6 +30,22 @@ export function createServerApp({ config, collections }) {
   });
 
   const app = express();
+  const authRouter = createAuthRouter({
+    userService: services.userService,
+    sessionService: services.sessionService,
+    stateService: services.stateService,
+    authHelpers,
+    config
+  });
+  const stateRouter = createStateRouter({
+    authHelpers,
+    stateService: services.stateService
+  });
+  const debugRouter = createDebugRouter({
+    userService: services.userService,
+    sessionService: services.sessionService,
+    stateService: services.stateService
+  });
 
   app.use(cors({
     origin: true,
@@ -64,26 +80,16 @@ export function createServerApp({ config, collections }) {
 
   app.use('/', express.static(rootDir));
 
-  app.use('/api/auth', createAuthRouter({
-    userService: services.userService,
-    sessionService: services.sessionService,
-    stateService: services.stateService,
-    authHelpers,
-    config
-  }));
+  app.use('/api/auth', authRouter);
+  app.use('/web/api/auth', authRouter);
 
-  app.use('/', createStateRouter({
-    authHelpers,
-    stateService: services.stateService
-  }));
+  app.use('/', stateRouter);
+  app.use('/web', stateRouter);
 
-  app.use('/', createDebugRouter({
-    userService: services.userService,
-    sessionService: services.sessionService,
-    stateService: services.stateService
-  }));
+  app.use('/', debugRouter);
+  app.use('/web', debugRouter);
 
-  app.get('/health', (req, res) => {
+  app.get(['/health', '/web/health'], (req, res) => {
     res.json({
       ok: true,
       version: '1.0.6-mongodb',
