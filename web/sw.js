@@ -1,4 +1,4 @@
-const CACHE_NAME = 'todo-sync-cache-v1';
+const CACHE_NAME = 'todo-sync-cache-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -6,10 +6,6 @@ const ASSETS = [
   '../styles/theme-light.css',
   '../styles/theme-dark.css',
   '../styles/app.css',
-  '../scripts/sidepanel.js',
-  '../scripts/auth.js',
-  '../scripts/sync.js',
-  '../scripts/sync-config.js',
   '../icons/favicon_io/favicon-32x32.png',
   '../icons/favicon_io/favicon-16x16.png',
   '../icons/favicon_io/apple-touch-icon-180.png',
@@ -17,6 +13,9 @@ const ASSETS = [
   '../icons/favicon_io/android-chrome-512x512.png',
   '../icons/favicon_io/favicon.ico'
 ];
+
+const API_PATH_PREFIXES = ['/api/', '/state', '/web/state'];
+const JS_PATH_PREFIXES = ['/scripts/', '/shared/', '/worker/'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -37,6 +36,10 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  if (!shouldHandleRequest(event.request)) {
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) {
@@ -51,6 +54,32 @@ self.addEventListener('fetch', (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, cloned));
         return response;
       });
-    })
+    }).catch(() => caches.match('./'))
   );
 });
+
+function shouldHandleRequest(request) {
+  if (request.method !== 'GET') {
+    return false;
+  }
+
+  const url = new URL(request.url);
+
+  if (url.origin !== self.location.origin) {
+    return false;
+  }
+
+  if (API_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) {
+    return false;
+  }
+
+  if (JS_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) {
+    return false;
+  }
+
+  if (url.pathname.endsWith('.js')) {
+    return false;
+  }
+
+  return true;
+}
