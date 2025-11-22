@@ -960,10 +960,28 @@ function shouldShowSuccessIllustration(folderId) {
 }
 
 function triggerTasksScreenAnimation({ reverse = false } = {}) {
-  const target = elements.screenTasks;
-  if (!target) {
+  const container = elements.taskList?.closest('.tasks-scroll') || elements.screenTasks;
+  if (!container) {
     return;
   }
+
+  const translate = reverse ? -16 : 16;
+  const keyframes = [
+    { opacity: 0, transform: `translate3d(0, ${translate}px, 0)` },
+    { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+  ];
+  const timing = {
+    duration: 260,
+    easing: 'cubic-bezier(0.33, 1, 0.68, 1)'
+  };
+
+  if (typeof container.animate === 'function') {
+    container.animate(keyframes, timing);
+    return;
+  }
+
+  // Fallback for older browsers without WAAPI support
+  const target = elements.screenTasks;
   target.classList.remove('screen-enter');
   target.classList.remove('screen-enter-reverse');
   void target.offsetWidth;
