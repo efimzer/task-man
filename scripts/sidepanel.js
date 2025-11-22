@@ -964,18 +964,19 @@ function triggerTasksScreenAnimation({ reverse = false } = {}) {
   if (!target) {
     return;
   }
-  const forwardClass = 'screen-slide-forward';
-  const backClass = 'screen-slide-back';
   target.classList.remove('screen-enter');
   target.classList.remove('screen-enter-reverse');
-  target.classList.remove(forwardClass);
-  target.classList.remove(backClass);
   void target.offsetWidth;
-  const animationClass = reverse ? backClass : forwardClass;
-  target.classList.add(animationClass);
-  target.addEventListener('animationend', () => {
-    target.classList.remove(animationClass);
-  }, { once: true });
+  if (reverse) {
+    target.classList.add('screen-enter-reverse');
+  }
+  requestAnimationFrame(() => {
+    target.classList.add('screen-enter');
+    target.addEventListener('animationend', () => {
+      target.classList.remove('screen-enter');
+      target.classList.remove('screen-enter-reverse');
+    }, { once: true });
+  });
 }
 
 function getScrollPosition() {

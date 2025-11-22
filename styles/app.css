@@ -174,21 +174,6 @@ body::before {
   animation-name: screen-enter-reverse;
 }
 
-.screen-tasks.screen-slide-forward,
-.screen-tasks.screen-slide-back {
-  animation-duration: 0.32s;
-  animation-fill-mode: both;
-  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.screen-tasks.screen-slide-forward {
-  animation-name: screen-tasks-slide-forward;
-}
-
-.screen-tasks.screen-slide-back {
-  animation-name: screen-tasks-slide-back;
-}
-
 @keyframes screen-enter-reverse {
   from {
     opacity: 0;
@@ -208,28 +193,6 @@ body::before {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes screen-tasks-slide-forward {
-  from {
-    opacity: 0;
-    transform: translate3d(40px, 0, 0);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes screen-tasks-slide-back {
-  from {
-    opacity: 0;
-    transform: translate3d(-40px, 0, 0);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
   }
 }
 
