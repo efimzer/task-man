@@ -39,6 +39,12 @@
     --primary: #5a7bff;
     --primary-light: rgba(90, 123, 255, 0.2);
     --error: #f97066;
+    --background-gradient:
+      radial-gradient(circle at 22% 18%, rgba(122, 141, 169, 0.32), rgba(122, 141, 169, 0) 42%),
+      radial-gradient(circle at 74% 12%, rgba(92, 115, 146, 0.26), rgba(92, 115, 146, 0) 48%),
+      radial-gradient(circle at 62% 78%, rgba(70, 88, 112, 0.2), rgba(70, 88, 112, 0) 60%),
+      radial-gradient(circle at 38% 86%, rgba(96, 114, 142, 0.15), rgba(96, 114, 142, 0) 55%),
+      linear-gradient(160deg, #070c12 0%, #121923 35%, #1d2531 65%, #2c3440 100%);
   }
 }
 
@@ -46,8 +52,8 @@
 .dark-mode {
   color-scheme: dark;
    --bg-primary: rgba(16, 22, 45, 0.8);
-  --glass-surface: rgba(49, 52, 70, 0.5);
-  --glass-surface-strong: rgba(44, 48, 66, 0.6);
+  --glass-surface: rgba(49, 52, 70, 0.3);
+  --glass-surface-strong: rgba(44, 48, 66, 0.4);
   --glass-border: rgba(132, 139, 168, 0.14);
   --glass-border-strong: rgba(132, 139, 168, 0.28);
   --shadow-soft: 0 18px 40px rgba(0, 0, 0, 0.1);
@@ -82,4 +88,10 @@
   --primary: #5a7bff;
   --primary-light: rgba(90, 123, 255, 0.2);
   --error: #f97066;
+  --background-gradient:
+    radial-gradient(circle at 22% 18%, rgba(122, 141, 169, 0.22), rgba(122, 141, 169, 0) 42%),
+    radial-gradient(circle at 74% 12%, rgba(92, 115, 146, 0.26), rgba(92, 115, 146, 0) 48%),
+    radial-gradient(circle at 62% 78%, rgba(70, 88, 112, 0.2), rgba(70, 88, 112, 0) 60%),
+    radial-gradient(circle at 38% 86%, rgba(96, 114, 142, 0.12), rgba(96, 114, 142, 0) 55%),
+    linear-gradient(160deg, #070c12 0%, #121923 35%, #1d2531 65%, #2c3440 100%);
 }

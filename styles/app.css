@@ -10,7 +10,6 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, sans-serif;
-  background: var(--bg-primary);
   color: var(--text-primary);
   margin: 0;
   min-height: 100vh;
@@ -21,6 +20,33 @@ body {
   position: relative;
   transition: background 0.6s ease, color 0.4s ease;
   -webkit-text-size-adjust: 100%;
+}
+
+html,
+body {
+  background-color: #1e2328;
+  background-image: var(--background-gradient);
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-attachment: fixed;
+}
+
+#app,
+.app-shell {
+  background: transparent;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: #1e2328;
+  background-image: var(--background-gradient);
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center top;
 }
 
 .hidden {
@@ -148,6 +174,21 @@ body {
   animation-name: screen-enter-reverse;
 }
 
+.screen-tasks.screen-slide-forward,
+.screen-tasks.screen-slide-back {
+  animation-duration: 0.32s;
+  animation-fill-mode: both;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.screen-tasks.screen-slide-forward {
+  animation-name: screen-tasks-slide-forward;
+}
+
+.screen-tasks.screen-slide-back {
+  animation-name: screen-tasks-slide-back;
+}
+
 @keyframes screen-enter-reverse {
   from {
     opacity: 0;
@@ -170,6 +211,28 @@ body {
   }
 }
 
+@keyframes screen-tasks-slide-forward {
+  from {
+    opacity: 0;
+    transform: translate3d(40px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes screen-tasks-slide-back {
+  from {
+    opacity: 0;
+    transform: translate3d(-40px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
 .screen-header,
 .tasks-header {
   display: flex;
@@ -183,6 +246,22 @@ body {
 .app-menu-button {
   font-size: 20px;
   line-height: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: var(--glass-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-soft, 0 18px 40px rgba(82, 90, 110, 0.16));
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.app-menu-button:hover,
+.app-menu-button:focus-visible {
+  background: var(--glass-surface-strong);
+  border-color: var(--glass-border-strong);
+  box-shadow: var(--shadow-strong, 0 22px 50px rgba(0, 0, 0, 0.2));
+  /* transform: translateY(-1px); */
+  outline: none;
 }
 
 .screen-title,
@@ -358,6 +437,23 @@ body {
   background: rgba(255, 255, 255, 0.2);
   border-color: rgba(255, 255, 255, 0.08);
   color: var(--text-secondary);
+}
+
+.icon-button.primary.app-menu-button {
+  background: var(--glass-surface);
+  border-color: var(--glass-border);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-soft, 0 18px 40px rgba(82, 90, 110, 0.16));
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.icon-button.primary.app-menu-button:hover,
+.icon-button.primary.app-menu-button:focus-visible {
+  background: var(--glass-surface-strong);
+  border-color: var(--glass-border-strong);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-strong, 0 22px 50px rgba(0, 0, 0, 0.2));
+  /* transform: translateY(-1px); */
 }
 
 .icon-button.primary:hover {

@@ -72,6 +72,30 @@ let fabPressTimer = null;
 let fabLongPressTriggered = false;
 let suppressNextFabClick = false;
 
+function supportsWebkitHaptics() {
+  return typeof window !== 'undefined' && typeof window.webkit?.playHaptic === 'function';
+}
+
+function playHaptic(pattern = 'light') {
+  try {
+    if (supportsWebkitHaptics()) {
+      window.webkit.playHaptic(pattern);
+      return true;
+    }
+  } catch (error) {
+    console.warn('Todo haptics: webkit play failed', error);
+  }
+  if (navigator?.vibrate) {
+    const fallbackDuration = pattern === 'heavy' ? 50 : pattern === 'medium' ? 30 : 10;
+    try {
+      navigator.vibrate(fallbackDuration);
+    } catch (error) {
+      // ignore vibration errors
+    }
+  }
+  return false;
+}
+
 const folderMenuState = {
   visible: false,
   folderId: null
@@ -940,19 +964,18 @@ function triggerTasksScreenAnimation({ reverse = false } = {}) {
   if (!target) {
     return;
   }
+  const forwardClass = 'screen-slide-forward';
+  const backClass = 'screen-slide-back';
   target.classList.remove('screen-enter');
   target.classList.remove('screen-enter-reverse');
+  target.classList.remove(forwardClass);
+  target.classList.remove(backClass);
   void target.offsetWidth;
-  if (reverse) {
-    target.classList.add('screen-enter-reverse');
-  }
-  requestAnimationFrame(() => {
-    target.classList.add('screen-enter');
-    target.addEventListener('animationend', () => {
-      target.classList.remove('screen-enter');
-      target.classList.remove('screen-enter-reverse');
-    }, { once: true });
-  });
+  const animationClass = reverse ? backClass : forwardClass;
+  target.classList.add(animationClass);
+  target.addEventListener('animationend', () => {
+    target.classList.remove(animationClass);
+  }, { once: true });
 }
 
 function getScrollPosition() {
@@ -1151,13 +1174,7 @@ function handlePullMove(event) {
     if (deltaY > 0 && deltaY > deltaX) {
       pullToRefreshState.pulling = true;
       showPullToRefreshIndicator();
-      if (navigator?.vibrate) {
-        try {
-          navigator.vibrate(6);
-        } catch (error) {
-          // ignore vibration errors
-        }
-      }
+      playHaptic('light');
     } else if (deltaY < 0) {
       pullToRefreshState.active = false;
       return;
@@ -1196,6 +1213,7 @@ function handlePullEnd(event) {
   pullToRefreshState.active = false;
 
   if (shouldTrigger) {
+    playHaptic('heavy');
     if (!manualSyncInFlight) {
       void handleManualSyncClick({ source: 'pull' });
     } else {
@@ -2351,6 +2369,7 @@ function triggerFabShortPress() {
     closeFolderMenu();
   }
   closeAppMenu();
+  playHaptic('medium');
   if (currentScreen === 'folders') {
     handleAddTaskInline({ forceComposerOnRoot: true });
     return;
@@ -2382,13 +2401,7 @@ function triggerFabLongPress() {
     closeFolderMenu();
   }
   closeAppMenu();
-  if (navigator?.vibrate) {
-    try {
-      navigator.vibrate(50);
-    } catch (error) {
-      // ignore
-    }
-  }
+  playHaptic('heavy');
 
   if (currentScreen === 'tasks') {
     if (state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
@@ -2847,7 +2860,10 @@ function createInlineComposer({ targetList = elements.taskList, placeholder = 'Ð
   });
   input.addEventListener('input', () => clearInvalid(input));
   input.addEventListener('blur', cancel);
-  confirmButton.addEventListener('click', commit);
+  confirmButton.addEventListener('click', () => {
+    playHaptic('medium');
+    commit();
+  });
   targetList.appendChild(item);
 
   return { element: item, input, targetList, folderId };
@@ -3126,7 +3142,12 @@ function beginTaskEdit(titleNode) {
   titleNode.after(input);
   input.focus({ preventScroll: true });
   autoResize();
-  input.select();
+  const end = input.value.length;
+  try {
+    input.setSelectionRange(end, end);
+  } catch (error) {
+    // setSelectionRange may fail on some platforms, fallback to default cursor placement
+  }
 }
 
 
