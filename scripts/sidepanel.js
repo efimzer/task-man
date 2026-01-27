@@ -3196,8 +3196,18 @@ ACTIVITY_EVENTS.forEach((eventName) => {
 
 function handleGlobalKeydown(event) {
   if (event.key === 'Escape') {
+    let handled = false;
     if (appMenuState.visible) {
       closeAppMenu();
+      handled = true;
+    }
+    if (folderMenuState.visible) {
+      closeFolderMenu();
+      handled = true;
+    }
+    if (weekMenuState.visible) {
+      closeWeekMenu();
+      handled = true;
     }
     if (
       !elements.folderModal.classList.contains('hidden')
@@ -3206,6 +3216,23 @@ function handleGlobalKeydown(event) {
     ) {
       event.preventDefault();
       closeActiveModal();
+      return;
+    }
+    if (handled) {
+      event.preventDefault();
+      return;
+    }
+    const target = event.target;
+    const tagName = (target?.tagName || '').toLowerCase();
+    const isEditable = target?.isContentEditable || tagName === 'input' || tagName === 'textarea';
+    if (!isEditable && currentScreen === 'settings') {
+      event.preventDefault();
+      hideSettingsScreen();
+      return;
+    }
+    if (!isEditable && currentScreen === 'tasks') {
+      event.preventDefault();
+      handleBackNavigation();
     }
     return;
   }
