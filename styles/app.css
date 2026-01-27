@@ -1238,12 +1238,22 @@ body::before {
 }
 
 @media (min-width: 960px) {
-  .week-view {
+  body {
     padding-inline: clamp(20px, 2.5vw, 30px);
   }
 
+  .app-shell {
+    width: 100%;
+    max-width: none;
+  }
+
+  .screen-header,
+  .tasks-header {
+    margin-inline: 0;
+  }
+
   .week-toolbar {
-    margin-inline: clamp(20px, 2.5vw, 30px);
+    margin-inline: 0;
   }
 }
 
