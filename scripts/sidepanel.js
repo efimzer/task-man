@@ -2993,7 +2993,7 @@ function handleGlobalKeydown(event) {
   const isEditable = target?.isContentEditable || tagName === 'input' || tagName === 'textarea';
   const lowerKey = typeof event.key === 'string' ? event.key.toLowerCase() : '';
 
-  if (lowerKey === 'f' && !isEditable) {
+  if ((lowerKey === 'f' || lowerKey === 'а') && !isEditable) {
     event.preventDefault();
     if (event.shiftKey) {
       createTaskViaShortcut();

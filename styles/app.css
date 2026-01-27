@@ -1237,6 +1237,16 @@ body::before {
   }
 }
 
+@media (min-width: 960px) {
+  .week-view {
+    padding-inline: clamp(20px, 2.5vw, 30px);
+  }
+
+  .week-toolbar {
+    margin-inline: clamp(20px, 2.5vw, 30px);
+  }
+}
+
 @supports (-webkit-touch-callout: none) {
   input,
   textarea,
