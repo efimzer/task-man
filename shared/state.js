@@ -1,4 +1,6 @@
 const DEFAULT_ICON = null;
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const VALID_VIEW_MODES = new Set(['list', 'week']);
 
 export const FOLDER_IDS = Object.freeze({
   ALL: 'all',
@@ -72,6 +74,7 @@ function normalizeFolder(folder, index, timestamp, fallbackParentId = FOLDER_IDS
   const icon = typeof folder.icon === 'string' && folder.icon.trim()
     ? folder.icon.trim()
     : DEFAULT_ICON;
+  const viewMode = VALID_VIEW_MODES.has(folder.viewMode) ? folder.viewMode : 'list';
 
   return {
     id,
@@ -80,7 +83,8 @@ function normalizeFolder(folder, index, timestamp, fallbackParentId = FOLDER_IDS
     createdAt,
     updatedAt,
     order,
-    icon
+    icon,
+    viewMode
   };
 }
 
@@ -110,6 +114,9 @@ function normalizeTask(task, index, timestamp, folderIds = new Set(), { complete
   const updatedAt = toFiniteNumber(task.updatedAt ?? task.modifiedAt, createdAt);
   const order = toFiniteNumber(task.order, index);
   const completedAt = toFiniteNumber(task.completedAt, updatedAt);
+  const plannedFor = typeof task.plannedFor === 'string' && ISO_DATE_PATTERN.test(task.plannedFor)
+    ? task.plannedFor
+    : undefined;
 
   return {
     id,
@@ -119,7 +126,8 @@ function normalizeTask(task, index, timestamp, folderIds = new Set(), { complete
     createdAt,
     updatedAt,
     order,
-    ...(Number.isFinite(completedAt) ? { completedAt } : {})
+    ...(Number.isFinite(completedAt) ? { completedAt } : {}),
+    ...(plannedFor ? { plannedFor } : {})
   };
 }
 

@@ -8,6 +8,7 @@
   --shadow-soft: 0 18px 40px rgba(82, 90, 110, 0.12);
   --shadow-strong: 0 24px 56px rgba(82, 90, 110, 0.18);
   --folder-menu: rgba(255, 255, 255, 0.95);
+  --task-drag-bg: #f7f9fc;
 
   --text-primary: rgba(34, 39, 53, 0.92);
   --text-secondary: rgba(34, 39, 53, 0.64);
@@ -51,6 +52,7 @@ html.light-mode {
   --shadow-soft: 0 18px 40px rgba(82, 90, 110, 0.12);
   --shadow-strong: 0 24px 56px rgba(82, 90, 110, 0.12);
   --folder-menu: rgba(255, 255, 255, 0.95);
+  --task-drag-bg: #f7f9fc;
 
   --text-primary: rgba(34, 39, 53, 0.92);
   --text-secondary: rgba(34, 39, 53, 0.64);

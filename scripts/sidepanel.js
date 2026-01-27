@@ -31,6 +31,13 @@ const PULL_REFRESH_READY_TEXT = 'Отпустите, чтобы синхрони
 const PULL_REFRESH_SYNCING_TEXT = 'Синхронизация...';
 const PULL_REFRESH_DONE_TEXT = 'Синхронизировано';
 const PULL_REFRESH_ERROR_TEXT = 'Ошибка синхронизации';
+const VIEW_MODES = Object.freeze({
+  LIST: 'list',
+  WEEK: 'week'
+});
+const VALID_VIEW_MODES = new Set(Object.values(VIEW_MODES));
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const LINK_PREVIEW_TTL = 12 * 60 * 60 * 1000;
 
 let uiContext = createDefaultUiContext();
 let uiContextReady = false;
@@ -55,6 +62,15 @@ let pendingAuthErrorMessage = '';
 let pendingAuthPrefillEmail = '';
 let currentScreen = null;
 let draggingTaskId = null;
+let draggingSubfolderId = null;
+let draggingSubfolderParentId = null;
+let draggingFolderId = null;
+let draggingFolderParentKey = null;
+let draggingFolderBlock = null;
+let draggingFolderAccepted = false;
+let suppressFolderClickUntil = 0;
+let weekDropTarget = null;
+let dragGhost = null;
 let editingFolderId = null;
 let folderMenuAnchor = null;
 let inlineComposer = null;
@@ -71,6 +87,9 @@ let folderModalParentId = null;
 let fabPressTimer = null;
 let fabLongPressTriggered = false;
 let suppressNextFabClick = false;
+const weekViewState = new Map();
+const weekAutoScrollState = new Map();
+const linkPreviewCache = new Map();
 
 function supportsWebkitHaptics() {
   return typeof window !== 'undefined' && typeof window.webkit?.playHaptic === 'function';
@@ -102,6 +121,11 @@ const folderMenuState = {
 };
 
 const appMenuState = {
+  visible: false,
+  anchor: null
+};
+
+const weekMenuState = {
   visible: false,
   anchor: null
 };
@@ -185,7 +209,10 @@ function createDefaultUiContext() {
   return {
     lastScreen: 'folders',
     lastOpenedFolderId: null,
-    navigationHistory: []
+    navigationHistory: [],
+    folderViewModes: {},
+    taskPlannedFor: {},
+    weekViewShowCompleted: {}
   };
 }
 
@@ -203,11 +230,42 @@ function sanitizeUiContext(value) {
         .map((id) => (typeof id === 'string' ? id.trim() : ''))
         .filter((id) => Boolean(id))
     : [];
+  const rawViewModes = value.folderViewModes;
+  const folderViewModes = {};
+  if (rawViewModes && typeof rawViewModes === 'object') {
+    Object.entries(rawViewModes).forEach(([id, mode]) => {
+      if (typeof id === 'string' && VALID_VIEW_MODES.has(mode)) {
+        folderViewModes[id] = mode;
+      }
+    });
+  }
+  const rawTaskPlannedFor = value.taskPlannedFor;
+  const taskPlannedFor = {};
+  if (rawTaskPlannedFor && typeof rawTaskPlannedFor === 'object') {
+    Object.entries(rawTaskPlannedFor).forEach(([id, date]) => {
+      const plannedFor = normalizePlannedFor(date);
+      if (typeof id === 'string' && plannedFor) {
+        taskPlannedFor[id] = plannedFor;
+      }
+    });
+  }
+  const rawWeekShowCompleted = value.weekViewShowCompleted;
+  const weekViewShowCompleted = {};
+  if (rawWeekShowCompleted && typeof rawWeekShowCompleted === 'object') {
+    Object.entries(rawWeekShowCompleted).forEach(([id, enabled]) => {
+      if (typeof id === 'string' && typeof enabled === 'boolean') {
+        weekViewShowCompleted[id] = enabled;
+      }
+    });
+  }
 
   return {
     lastScreen,
     lastOpenedFolderId,
-    navigationHistory
+    navigationHistory,
+    folderViewModes,
+    taskPlannedFor,
+    weekViewShowCompleted
   };
 }
 
@@ -261,8 +319,8 @@ async function loadUiContextFromStorage() {
   return sanitized;
 }
 
-async function persistUiContext() {
-  if (!uiContextReady) {
+async function persistUiContext({ force = false } = {}) {
+  if (!uiContextReady && !force) {
     return;
   }
 
@@ -448,6 +506,7 @@ function ensureSystemFolders(state) {
     const updatedAt = Number.isFinite(folder.updatedAt) ? folder.updatedAt : createdAt;
     const order = Number.isFinite(folder.order) ? folder.order : index;
     const icon = typeof folder.icon === 'string' && folder.icon.trim() ? folder.icon.trim() : null;
+    const viewMode = VALID_VIEW_MODES.has(folder.viewMode) ? folder.viewMode : VIEW_MODES.LIST;
 
     map.set(id, {
       id,
@@ -456,7 +515,8 @@ function ensureSystemFolders(state) {
       createdAt,
       updatedAt,
       order,
-      icon
+      icon,
+      viewMode
     });
   });
 
@@ -469,6 +529,7 @@ function ensureSystemFolders(state) {
       existing.createdAt = Number.isFinite(existing.createdAt) ? existing.createdAt : now;
       existing.updatedAt = Number.isFinite(existing.updatedAt) ? existing.updatedAt : now;
       existing.icon = existing.icon ?? blueprint.icon ?? null;
+      existing.viewMode = VALID_VIEW_MODES.has(existing.viewMode) ? existing.viewMode : VIEW_MODES.LIST;
     } else {
       map.set(blueprint.id, {
         id: blueprint.id,
@@ -477,7 +538,8 @@ function ensureSystemFolders(state) {
         createdAt: now,
         updatedAt: now,
         order: blueprint.order ?? index,
-        icon: blueprint.icon ?? null
+        icon: blueprint.icon ?? null,
+        viewMode: VIEW_MODES.LIST
       });
     }
   });
@@ -528,6 +590,235 @@ function getFolderById(folderId) {
     return null;
   }
   return state.folders.find((folder) => folder.id === folderId) ?? null;
+}
+
+function getFolderViewMode(folderId) {
+  if (!folderId || folderId === ALL_FOLDER_ID || folderId === ARCHIVE_FOLDER_ID) {
+    return VIEW_MODES.LIST;
+  }
+  const contextMode = uiContext?.folderViewModes?.[folderId];
+  if (VALID_VIEW_MODES.has(contextMode)) {
+    return contextMode;
+  }
+  const folder = getFolderById(folderId);
+  if (!folder) {
+    return VIEW_MODES.LIST;
+  }
+  return folder.viewMode === VIEW_MODES.WEEK ? VIEW_MODES.WEEK : VIEW_MODES.LIST;
+}
+
+function setFolderViewMode(folderId, viewMode) {
+  if (!folderId || !VALID_VIEW_MODES.has(viewMode)) {
+    return;
+  }
+  const folder = getFolderById(folderId);
+  if (!folder) {
+    return;
+  }
+  if (folder.viewMode === viewMode) {
+    return;
+  }
+  if (viewMode === VIEW_MODES.WEEK) {
+    weekAutoScrollState.delete(folderId);
+  }
+  folder.viewMode = viewMode;
+  folder.updatedAt = Date.now();
+  if (!PROTECTED_FOLDER_IDS.has(folderId)) {
+    if (!uiContext.folderViewModes || typeof uiContext.folderViewModes !== 'object') {
+      uiContext.folderViewModes = {};
+    }
+    uiContext.folderViewModes[folderId] = viewMode;
+    void persistUiContext({ force: true });
+  }
+  persistState();
+  render();
+}
+
+function syncFolderViewModesToContext({ persist = true } = {}) {
+  if (!uiContext || !state?.folders) {
+    return false;
+  }
+  if (!uiContext.folderViewModes || typeof uiContext.folderViewModes !== 'object') {
+    uiContext.folderViewModes = {};
+  }
+  const mapping = uiContext.folderViewModes;
+  let changed = false;
+  state.folders.forEach((folder) => {
+    if (!folder || PROTECTED_FOLDER_IDS.has(folder.id)) {
+      return;
+    }
+    const mode = VALID_VIEW_MODES.has(folder.viewMode) ? folder.viewMode : VIEW_MODES.LIST;
+    if (mapping[folder.id] !== mode) {
+      mapping[folder.id] = mode;
+      changed = true;
+    }
+  });
+  if (changed && uiContextReady && persist) {
+    void persistUiContext();
+  }
+  return changed;
+}
+
+function applyFolderViewModesFromContext({ persist = false } = {}) {
+  if (!uiContext || !state?.folders) {
+    return false;
+  }
+  const mapping = uiContext.folderViewModes;
+  if (!mapping || typeof mapping !== 'object') {
+    return false;
+  }
+  let mutated = false;
+  const now = Date.now();
+  state.folders.forEach((folder) => {
+    if (!folder || PROTECTED_FOLDER_IDS.has(folder.id)) {
+      return;
+    }
+    const desired = mapping[folder.id];
+    if (!VALID_VIEW_MODES.has(desired)) {
+      return;
+    }
+    if (folder.viewMode !== desired) {
+      folder.viewMode = desired;
+      folder.updatedAt = now;
+      mutated = true;
+    }
+  });
+  if (mutated) {
+    ensureSystemFolders(state);
+    if (persist) {
+      persistState();
+    }
+  }
+  return mutated;
+}
+
+function isWeekViewActive(folderId = state?.ui?.selectedFolderId) {
+  if (!folderId || folderId === ALL_FOLDER_ID || folderId === ARCHIVE_FOLDER_ID) {
+    return false;
+  }
+  return getFolderViewMode(folderId) === VIEW_MODES.WEEK;
+}
+
+function getWeekStartForFolder(folderId) {
+  const today = new Date();
+  if (!folderId) {
+    return getStartOfISOWeek(today);
+  }
+  const stored = weekViewState.get(folderId);
+  if (stored?.start && isValidISODate(stored.start)) {
+    const parsed = parseISODate(stored.start);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  const start = getStartOfISOWeek(today);
+  weekViewState.set(folderId, {
+    ...(stored && typeof stored === 'object' ? stored : {}),
+    start: formatISODate(start)
+  });
+  return start;
+}
+
+function setWeekStartForFolder(folderId, date) {
+  if (!folderId) {
+    return;
+  }
+  const start = getStartOfISOWeek(date);
+  weekAutoScrollState.delete(folderId);
+  const existing = weekViewState.get(folderId);
+  weekViewState.set(folderId, {
+    ...(existing && typeof existing === 'object' ? existing : {}),
+    start: formatISODate(start)
+  });
+}
+
+function isISODateInWeek(isoDate, weekStart) {
+  if (!isValidISODate(isoDate)) {
+    return false;
+  }
+  const parsed = parseISODate(isoDate);
+  if (!parsed) {
+    return false;
+  }
+  const start = getStartOfISOWeek(weekStart);
+  const end = addDays(start, 6);
+  return parsed >= start && parsed <= end;
+}
+
+function getWeekSelectedDateForFolder(folderId, weekStart) {
+  if (!folderId) {
+    return null;
+  }
+  const stored = weekViewState.get(folderId);
+  const candidate = stored?.selected;
+  const start = weekStart ?? getWeekStartForFolder(folderId);
+  if (candidate && isISODateInWeek(candidate, start)) {
+    return candidate;
+  }
+  return null;
+}
+
+function setWeekSelectedDateForFolder(folderId, isoDate) {
+  if (!folderId || !isValidISODate(isoDate)) {
+    return;
+  }
+  const existing = weekViewState.get(folderId);
+  weekViewState.set(folderId, {
+    ...(existing && typeof existing === 'object' ? existing : {}),
+    selected: isoDate
+  });
+}
+
+function clearWeekSelectedDateForFolder(folderId) {
+  if (!folderId) {
+    return;
+  }
+  const existing = weekViewState.get(folderId);
+  if (!existing || typeof existing !== 'object' || !existing.selected) {
+    return;
+  }
+  const next = { ...existing };
+  delete next.selected;
+  weekViewState.set(folderId, next);
+}
+
+function getWeekShowCompleted(folderId) {
+  if (!folderId) {
+    return false;
+  }
+  return Boolean(uiContext.weekViewShowCompleted?.[folderId]);
+}
+
+function setWeekShowCompleted(folderId, value) {
+  if (!folderId) {
+    return;
+  }
+  if (!uiContext.weekViewShowCompleted || typeof uiContext.weekViewShowCompleted !== 'object') {
+    uiContext.weekViewShowCompleted = {};
+  }
+  const nextValue = Boolean(value);
+  if (uiContext.weekViewShowCompleted[folderId] === nextValue) {
+    return;
+  }
+  uiContext.weekViewShowCompleted[folderId] = nextValue;
+  void persistUiContext({ force: true });
+  renderTasks();
+}
+
+function updateFolderMenuViewState(folderId) {
+  if (!elements.folderMenu) {
+    return;
+  }
+  const listItem = elements.folderMenu.querySelector('[data-action="view-list"]');
+  const weekItem = elements.folderMenu.querySelector('[data-action="view-week"]');
+  if (!listItem || !weekItem) {
+    return;
+  }
+  const viewMode = getFolderViewMode(folderId);
+  listItem.classList.toggle('is-selected', viewMode === VIEW_MODES.LIST);
+  weekItem.classList.toggle('is-selected', viewMode === VIEW_MODES.WEEK);
+  listItem.setAttribute('aria-checked', String(viewMode === VIEW_MODES.LIST));
+  weekItem.setAttribute('aria-checked', String(viewMode === VIEW_MODES.WEEK));
 }
 
 function expandAncestors(folderId) {
@@ -582,6 +873,8 @@ function applyUiContext(restoredContext) {
     ...sanitized,
     navigationHistory: [...(sanitized.navigationHistory ?? [])]
   };
+  applyFolderViewModesFromContext({ persist: false });
+  syncFolderViewModesToContext({ persist: false });
 
   pendingRestoredContext = null;
 
@@ -685,6 +978,7 @@ async function restoreUiContextFromStorage() {
     updateNavigationHistory(null);
     uiContextReady = true;
   }
+  ensureTaskPlannedFor({ persistStateChanges: true, persistContextChanges: true });
 }
 
 function updateUiContextForScreen(screenName) {
@@ -710,6 +1004,7 @@ function updateUiContextForScreen(screenName) {
     updateNavigationHistory(null);
   }
 
+  syncFolderViewModesToContext({ persist: false });
   void persistUiContext();
 }
 
@@ -838,11 +1133,136 @@ function createLinkElement({ href, label }) {
   return anchor;
 }
 
-function createLinkifiedFragment(text) {
+function isValidISODate(value) {
+  return typeof value === 'string' && ISO_DATE_PATTERN.test(value);
+}
+
+function formatISODate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseISODate(value) {
+  if (!isValidISODate(value)) {
+    return null;
+  }
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) {
+    return null;
+  }
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return null;
+  }
+  return date;
+}
+
+function addDays(date, amount) {
+  const base = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  base.setDate(base.getDate() + amount);
+  return base;
+}
+
+function getStartOfISOWeek(date) {
+  const base = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = base.getDay(); // 0 (Sun) - 6 (Sat)
+  const offset = (day + 6) % 7; // Monday = 0
+  base.setDate(base.getDate() - offset);
+  base.setHours(0, 0, 0, 0);
+  return base;
+}
+
+function formatWeekdayLabel(date) {
+  const locale = navigator?.language || 'en-US';
+  const weekday = new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(date);
+  const day = new Intl.DateTimeFormat(locale, { day: 'numeric' }).format(date);
+  return `${weekday.replace('.', '')} ${day}`;
+}
+
+function formatWeekRangeLabel(startDate) {
+  const locale = navigator?.language || 'en-US';
+  const endDate = addDays(startDate, 6);
+  const now = new Date();
+  const includeYear = startDate.getFullYear() !== endDate.getFullYear()
+    || startDate.getFullYear() !== now.getFullYear();
+  const formatter = new Intl.DateTimeFormat(locale, includeYear
+    ? { month: 'short', day: 'numeric', year: 'numeric' }
+    : { month: 'short', day: 'numeric' });
+  return `${formatter.format(startDate)} – ${formatter.format(endDate)}`;
+}
+
+function normalizePlannedFor(value) {
+  return isValidISODate(value) ? value : undefined;
+}
+
+function rememberTaskPlannedFor(taskId, plannedFor) {
+  const normalized = normalizePlannedFor(plannedFor);
+  if (!taskId || !normalized) {
+    return;
+  }
+  if (!uiContext.taskPlannedFor || typeof uiContext.taskPlannedFor !== 'object') {
+    uiContext.taskPlannedFor = {};
+  }
+  if (uiContext.taskPlannedFor[taskId] === normalized) {
+    return;
+  }
+  uiContext.taskPlannedFor[taskId] = normalized;
+  void persistUiContext({ force: true });
+}
+
+function ensureTaskPlannedFor({ persistStateChanges = true, persistContextChanges = true } = {}) {
+  if (!state?.tasks || !state?.archivedTasks) {
+    return false;
+  }
+  const fallback = formatISODate(new Date());
+  if (!uiContext.taskPlannedFor || typeof uiContext.taskPlannedFor !== 'object') {
+    uiContext.taskPlannedFor = {};
+  }
+  const mapping = uiContext.taskPlannedFor;
+  const now = Date.now();
+  let mutated = false;
+  let mappingChanged = false;
+
+  const apply = (task) => {
+    if (!task || !task.id) {
+      return;
+    }
+    const normalized = normalizePlannedFor(task.plannedFor);
+    const mapped = normalizePlannedFor(mapping[task.id]);
+    const desired = normalized ?? mapped ?? fallback;
+    if (task.plannedFor !== desired) {
+      task.plannedFor = desired;
+      task.updatedAt = Number.isFinite(task.updatedAt) ? task.updatedAt : now;
+      mutated = true;
+    }
+    if (mapping[task.id] !== desired) {
+      mapping[task.id] = desired;
+      mappingChanged = true;
+    }
+  };
+
+  state.tasks.forEach(apply);
+  state.archivedTasks.forEach(apply);
+
+  if (mappingChanged && persistContextChanges) {
+    void persistUiContext({ force: true });
+  }
+  if (mutated && persistStateChanges) {
+    persistState();
+  }
+
+  return mutated || mappingChanged;
+}
+
+function createLinkifiedFragment(text, options = {}) {
   const fragment = document.createDocumentFragment();
   if (!text) {
     return fragment;
   }
+  const hideHref = typeof options.hideHref === 'string' ? options.hideHref : null;
+  const replacementText = typeof options.replacementText === 'string' ? options.replacementText : '';
 
   const input = String(text);
   let lastIndex = 0;
@@ -889,6 +1309,14 @@ function createLinkifiedFragment(text) {
       continue;
     }
 
+    if (!isMarkdown && hideHref && normalized === hideHref) {
+      if (replacementText) {
+        appendTextWithBreaks(fragment, replacementText);
+      }
+      lastIndex = matchEnd;
+      continue;
+    }
+
     const anchor = createLinkElement({ href: normalized, label: label || normalized });
     fragment.appendChild(anchor);
 
@@ -906,12 +1334,410 @@ function createLinkifiedFragment(text) {
   return fragment;
 }
 
-function renderTaskTitle(node, text) {
+function extractFirstLink(text) {
+  if (!text) {
+    return null;
+  }
+  const input = String(text);
+  LINKIFY_PATTERN.lastIndex = 0;
+  let match;
+
+  while ((match = LINKIFY_PATTERN.exec(input)) !== null) {
+    const fullMatch = match[0];
+    const matchStart = match.index;
+    const isMarkdown = Boolean(match[1]);
+
+    if (!isMarkdown) {
+      const precedingChar = matchStart > 0 ? input.charAt(matchStart - 1) : '';
+      if (precedingChar === '@') {
+        continue;
+      }
+    }
+
+    let label = '';
+    let rawUrl = '';
+
+    if (isMarkdown) {
+      label = match[2] ?? '';
+      rawUrl = match[3] ?? '';
+    } else {
+      const stripped = stripTrailingPunctuation(fullMatch);
+      label = stripped.url;
+      rawUrl = stripped.url;
+    }
+
+    const normalized = normalizeUrl(rawUrl);
+    if (!normalized) {
+      continue;
+    }
+
+    return {
+      href: normalized,
+      label: label || normalized,
+      isMarkdown
+    };
+  }
+
+  return null;
+}
+
+function getHostname(value) {
+  if (!value) {
+    return '';
+  }
+  try {
+    return new URL(value).hostname.replace(/^www\./i, '');
+  } catch (error) {
+    return '';
+  }
+}
+
+function isDirectImageUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const path = parsed.pathname.toLowerCase();
+    return /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(path);
+  } catch (error) {
+    return false;
+  }
+}
+
+function isDirectVideoUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const path = parsed.pathname.toLowerCase();
+    return /\.(mp4|webm|ogg|mov|m4v)$/i.test(path);
+  } catch (error) {
+    return false;
+  }
+}
+
+function getYouTubeId(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    if (host === 'youtu.be') {
+      const id = parsed.pathname.slice(1);
+      return id || null;
+    }
+    if (!host.endsWith('youtube.com')) {
+      return null;
+    }
+    if (parsed.pathname === '/watch') {
+      return parsed.searchParams.get('v');
+    }
+    if (parsed.pathname.startsWith('/shorts/')) {
+      return parsed.pathname.split('/')[2] || null;
+    }
+    if (parsed.pathname.startsWith('/embed/')) {
+      return parsed.pathname.split('/')[2] || null;
+    }
+    if (parsed.pathname.startsWith('/live/')) {
+      return parsed.pathname.split('/')[2] || null;
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function isVideoLink(value) {
+  if (getYouTubeId(value)) {
+    return true;
+  }
+  if (isDirectVideoUrl(value)) {
+    return true;
+  }
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    if (host.endsWith('vimeo.com') || host.endsWith('loom.com') || host.endsWith('rutube.ru')) {
+      return true;
+    }
+  } catch (error) {
+    return false;
+  }
+  return false;
+}
+
+function buildSitePreviewUrl(value) {
+  const encoded = encodeURI(value);
+  return `https://image.thum.io/get/width/900/noanimate/${encoded}`;
+}
+
+function getPreviewMedia(value) {
+  const youtubeId = getYouTubeId(value);
+  if (youtubeId) {
+    return {
+      src: `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`,
+      isVideo: true
+    };
+  }
+
+  if (isDirectImageUrl(value)) {
+    return { src: value, isVideo: false };
+  }
+
+  if (isVideoLink(value)) {
+    return { src: buildSitePreviewUrl(value), isVideo: true };
+  }
+
+  return { src: buildSitePreviewUrl(value), isVideo: false };
+}
+
+function getCachedPreviewData(href) {
+  const cached = linkPreviewCache.get(href);
+  if (!cached) {
+    return null;
+  }
+  if (cached.data && cached.fetchedAt && Date.now() - cached.fetchedAt < LINK_PREVIEW_TTL) {
+    return cached.data;
+  }
+  if (cached.promise) {
+    return null;
+  }
+  return cached.data ?? null;
+}
+
+async function fetchLinkPreviewData(href) {
+  if (!href) {
+    return null;
+  }
+  const cached = linkPreviewCache.get(href);
+  if (cached?.data && cached.fetchedAt && Date.now() - cached.fetchedAt < LINK_PREVIEW_TTL) {
+    return cached.data;
+  }
+  if (cached?.promise) {
+    return cached.promise;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  const endpoint = `${syncConfig.baseUrl}/api/preview?url=${encodeURIComponent(href)}`;
+  const headers = new Headers();
+  const token = authStore.getToken();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const promise = fetch(endpoint, {
+    method: 'GET',
+    headers,
+    credentials: 'include',
+    signal: controller.signal
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        return null;
+      }
+      const payload = await response.json();
+      return payload?.data ?? null;
+    })
+    .catch(() => null)
+    .finally(() => {
+      clearTimeout(timeout);
+    });
+
+  linkPreviewCache.set(href, { promise });
+
+  const data = await promise;
+  linkPreviewCache.set(href, { data, fetchedAt: Date.now() });
+  return data;
+}
+
+function applyLinkPreviewMetadata(preview, data) {
+  if (!preview || !data || typeof data !== 'object') {
+    return;
+  }
+  const titleNode = preview.querySelector('.link-preview-title');
+  const urlNode = preview.querySelector('.link-preview-url');
+  const descriptionNode = preview.querySelector('.link-preview-description');
+
+  if (data.title && titleNode) {
+    titleNode.textContent = data.title;
+  }
+  if (data.description && descriptionNode) {
+    descriptionNode.textContent = data.description;
+    descriptionNode.classList.remove('is-empty');
+  } else if (descriptionNode) {
+    descriptionNode.textContent = '';
+    descriptionNode.classList.add('is-empty');
+  }
+  if (data.displayUrl && urlNode) {
+    urlNode.textContent = data.displayUrl;
+  }
+
+  const href = preview.dataset.href;
+  if (!href || isVideoLink(href)) {
+    return;
+  }
+  if (data.image && /^https?:/i.test(data.image)) {
+    const image = preview.querySelector('.link-preview-image');
+    if (image && image.src !== data.image) {
+      image.src = data.image;
+    }
+  }
+}
+
+function renderTaskLinkPreview(bodyNode, text) {
+  if (!bodyNode) {
+    return null;
+  }
+
+  const link = extractFirstLink(text);
+  let preview = bodyNode.querySelector('.task-link-preview');
+
+  if (!link) {
+    preview?.remove();
+    return null;
+  }
+
+  if (!preview) {
+    preview = document.createElement('a');
+    preview.className = 'task-link-preview';
+    preview.target = '_blank';
+    preview.rel = 'noopener noreferrer';
+
+    const content = document.createElement('span');
+    content.className = 'link-preview-content';
+
+    const title = document.createElement('span');
+    title.className = 'link-preview-title';
+
+    const description = document.createElement('span');
+    description.className = 'link-preview-description is-empty';
+
+    const url = document.createElement('span');
+    url.className = 'link-preview-url';
+
+    content.append(title, description, url);
+    preview.append(content);
+
+    const stop = (event) => event.stopPropagation();
+    preview.addEventListener('click', (event) => {
+      if (event.detail > 1) {
+        event.preventDefault();
+      }
+      stop(event);
+    });
+    preview.addEventListener('mousedown', stop);
+    preview.addEventListener('mouseup', stop);
+    preview.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    const folderLabel = bodyNode.querySelector('.task-folder-label');
+    if (folderLabel) {
+      bodyNode.insertBefore(preview, folderLabel);
+    } else {
+      bodyNode.appendChild(preview);
+    }
+  }
+
+  preview.href = link.href;
+
+  let hostname = '';
+  let displayUrl = link.href;
+  try {
+    const parsed = new URL(link.href);
+    hostname = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : '';
+    displayUrl = `${hostname}${path}${parsed.search ?? ''}`;
+  } catch (error) {
+    // keep fallback displayUrl
+  }
+
+  const label = typeof link.label === 'string' ? link.label.trim() : '';
+  const titleNode = preview.querySelector('.link-preview-title');
+  const urlNode = preview.querySelector('.link-preview-url');
+  const titleText = label && label !== link.href && label !== displayUrl ? label : (hostname || displayUrl);
+
+  if (titleNode) {
+    titleNode.textContent = titleText || displayUrl;
+  }
+  if (urlNode) {
+    urlNode.textContent = displayUrl;
+  }
+  preview.setAttribute('aria-label', `Открыть ссылку ${displayUrl}`);
+  preview.dataset.href = link.href;
+
+  const existingMedia = preview.querySelector('.link-preview-media');
+  const { src, isVideo } = getPreviewMedia(link.href);
+  let media = existingMedia;
+  if (!media) {
+    media = document.createElement('span');
+    media.className = 'link-preview-media';
+    preview.insertBefore(media, preview.firstChild);
+  } else {
+    media.textContent = '';
+  }
+
+  const image = document.createElement('img');
+  image.className = 'link-preview-image';
+  image.alt = titleText || hostname || 'Preview';
+  image.loading = 'lazy';
+  image.decoding = 'async';
+  image.referrerPolicy = 'no-referrer';
+  image.src = src;
+  image.addEventListener('error', () => {
+    if (!hostname) {
+      return;
+    }
+    const fallback = `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`;
+    if (image.src !== fallback) {
+      image.src = fallback;
+      image.classList.add('is-fallback');
+    }
+  }, { once: true });
+
+  media.appendChild(image);
+  media.classList.toggle('is-video', Boolean(isVideo));
+
+  if (isVideo) {
+    const play = document.createElement('span');
+    play.className = 'link-preview-play';
+    play.setAttribute('aria-hidden', 'true');
+    play.textContent = '▶';
+    media.appendChild(play);
+  }
+
+  const cached = getCachedPreviewData(link.href);
+  if (cached) {
+    applyLinkPreviewMetadata(preview, cached);
+  } else {
+    fetchLinkPreviewData(link.href).then((data) => {
+      if (!data || !preview.isConnected || preview.dataset.href !== link.href) {
+        return;
+      }
+      applyLinkPreviewMetadata(preview, data);
+    });
+  }
+
+  return link.href;
+}
+
+function renderTaskTitle(node, text, { previewHref } = {}) {
   if (!node) {
     return;
   }
   node.textContent = '';
-  const fragment = createLinkifiedFragment(text);
+  if (!previewHref) {
+    const fragment = createLinkifiedFragment(text);
+    node.appendChild(fragment);
+    return;
+  }
+  const fragment = createLinkifiedFragment(text, { hideHref: previewHref });
+  const visibleText = fragment.textContent?.replace(/[\s.,!?;:]+/g, '') ?? '';
+  if (!visibleText) {
+    const hostname = getHostname(previewHref) || 'Ссылка';
+    const replacement = createLinkifiedFragment(text, {
+      hideHref: previewHref,
+      replacementText: hostname
+    });
+    node.appendChild(replacement);
+    return;
+  }
   node.appendChild(fragment);
 }
 
@@ -1387,6 +2213,13 @@ function normalizeLoadedState() {
       completedAt: Number.isFinite(task.completedAt) ? task.completedAt : now + index,
       order: Number.isFinite(task.order) ? task.order : index
     };
+    const plannedFor = normalizePlannedFor(task.plannedFor);
+    if (plannedFor) {
+      normalized.plannedFor = plannedFor;
+    } else if ('plannedFor' in normalized) {
+      delete normalized.plannedFor;
+      mutated = true;
+    }
     seenIds.add(normalized.id);
     delete normalized.title;
     return normalized;
@@ -1410,6 +2243,7 @@ function normalizeLoadedState() {
     const createdAt = Number.isFinite(task.createdAt) ? task.createdAt : now;
     const updatedAt = Number.isFinite(task.updatedAt) ? task.updatedAt : createdAt;
     const order = Number.isFinite(task.order) ? task.order : index;
+    const plannedFor = normalizePlannedFor(task.plannedFor);
 
     const normalizedTask = {
       ...task,
@@ -1418,8 +2252,13 @@ function normalizeLoadedState() {
       completed: Boolean(task.completed),
       createdAt,
       updatedAt,
-      order
+      order,
+      ...(plannedFor ? { plannedFor } : {})
     };
+    if (!plannedFor && 'plannedFor' in normalizedTask) {
+      delete normalizedTask.plannedFor;
+      mutated = true;
+    }
 
     delete normalizedTask.title;
 
@@ -1493,6 +2332,9 @@ function applyRemoteState(remoteState) {
   };
 
   ensureSystemFolders(state);
+  const appliedViewModes = applyFolderViewModesFromContext({ persist: false });
+  const plannedForUpdated = ensureTaskPlannedFor({ persistStateChanges: false, persistContextChanges: true });
+  syncFolderViewModesToContext({ persist: false });
   attemptRestorePendingUiContext({ allowFallback: true });
   const targetScreen = state.ui?.activeScreen === 'tasks' ? 'tasks' : 'folders';
 
@@ -1504,6 +2346,9 @@ function applyRemoteState(remoteState) {
 
   render();
   updateUiContextForScreen(targetScreen);
+  if (appliedViewModes || plannedForUpdated) {
+    persistState();
+  }
 }
 
 function updateSyncStatusLabel({ syncing = false } = {}) {
@@ -1536,6 +2381,15 @@ const elements = {
   folderModalCancel: document.getElementById('folderModalCancel'),
   taskList: document.getElementById('taskList'),
   taskTemplate: document.getElementById('taskTemplate'),
+  weekToolbar: document.getElementById('weekToolbar'),
+  weekPrevButton: document.getElementById('weekPrevButton'),
+  weekNextButton: document.getElementById('weekNextButton'),
+  weekTodayButton: document.getElementById('weekTodayButton'),
+  weekRangeLabel: document.getElementById('weekRangeLabel'),
+  weekView: document.getElementById('weekView'),
+  weekGrid: document.getElementById('weekGrid'),
+  weekMenuButton: document.getElementById('weekMenuButton'),
+  weekMenu: document.getElementById('weekMenu'),
   emptyState: document.getElementById('emptyState'),
   backButton: document.getElementById('backToFolders'),
   tasksHeaderTitle: document.getElementById('tasksHeaderTitle'),
@@ -1682,15 +2536,22 @@ elements.folderList.addEventListener('click', handleFolderClick);
 elements.folderList.addEventListener('keydown', handleFolderKeydown);
 elements.folderList.addEventListener('change', handleTaskChange);
 elements.folderList.addEventListener('dblclick', handleTaskDblClick);
+elements.folderList.addEventListener('dragstart', handleFolderDragStart);
+elements.folderList.addEventListener('dragover', handleFolderDragOver);
+elements.folderList.addEventListener('drop', handleFolderDrop);
+elements.folderList.addEventListener('dragend', handleFolderDragEnd);
 elements.folderMenu.addEventListener('click', handleFolderMenuClick);
 document.addEventListener('click', handleDocumentClick, true);
+document.addEventListener('click', handleWeekMenuDocumentClick, true);
 window.addEventListener('resize', () => {
   closeFolderMenu();
   closeAppMenu();
+  closeWeekMenu();
 });
 document.addEventListener('scroll', () => {
   closeFolderMenu();
   closeAppMenu();
+  closeWeekMenu();
   if (!pullToRefreshState.pulling && !pullToRefreshState.syncing && getScrollPosition() > 0) {
     resetPullToRefresh({ immediate: true });
   }
@@ -2094,6 +2955,23 @@ elements.taskList.addEventListener('dragstart', handleDragStart);
 elements.taskList.addEventListener('dragover', handleDragOver);
 elements.taskList.addEventListener('dragend', handleDragEnd);
 
+if (elements.weekView) {
+  elements.weekView.addEventListener('click', handleTaskListClick);
+  elements.weekView.addEventListener('change', handleTaskChange);
+  elements.weekView.addEventListener('dblclick', handleTaskDblClick);
+  elements.weekView.addEventListener('keydown', handleTaskKeydown);
+  elements.weekView.addEventListener('dragstart', handleWeekDragStart);
+  elements.weekView.addEventListener('dragover', handleWeekDragOver);
+  elements.weekView.addEventListener('drop', handleWeekDrop);
+  elements.weekView.addEventListener('dragend', handleWeekDragEnd);
+}
+
+elements.weekPrevButton?.addEventListener('click', () => shiftWeek(-1));
+elements.weekNextButton?.addEventListener('click', () => shiftWeek(1));
+elements.weekTodayButton?.addEventListener('click', () => jumpToCurrentWeek());
+elements.weekMenuButton?.addEventListener('click', handleWeekMenuToggle);
+elements.weekMenu?.addEventListener('click', handleWeekMenuClick);
+
 elements.backButton.addEventListener('click', handleBackNavigation);
 
 document.addEventListener('keydown', handleGlobalKeydown);
@@ -2309,7 +3187,8 @@ function addFolder(name, { parentId } = {}) {
     createdAt: now,
     updatedAt: now,
     order: nextOrder,
-    icon: null
+    icon: null,
+    viewMode: VIEW_MODES.LIST
   });
 
   ensureSystemFolders(state);
@@ -2459,6 +3338,9 @@ function createTaskViaShortcut() {
 }
 
 function handleFolderClick(event) {
+  if (draggingFolderId || Date.now() < suppressFolderClickUntil) {
+    return;
+  }
   const taskItem = event.target.closest('.task-item');
   if (taskItem) {
     handleTaskListClick(event);
@@ -2534,6 +3416,11 @@ function handleFolderMenuClick(event) {
 
   if (action === 'rename') {
     startFolderRename(folderMenuState.folderId);
+  } else if (action === 'view-list') {
+    setFolderViewMode(folderMenuState.folderId, VIEW_MODES.LIST);
+  } else if (action === 'view-week') {
+    setWeekStartForFolder(folderMenuState.folderId, new Date());
+    setFolderViewMode(folderMenuState.folderId, VIEW_MODES.WEEK);
   } else if (action === 'delete') {
     if (PROTECTED_FOLDER_IDS.has(folderMenuState.folderId)) {
       window.alert('Эту папку нельзя удалить');
@@ -2602,6 +3489,14 @@ function deleteFolder(folderId) {
 
   state.folders = state.folders.filter((folder) => !descendants.has(folder.id));
   state.tasks = state.tasks.filter((task) => !descendants.has(task.folderId));
+  let viewModeContextChanged = false;
+  descendants.forEach((id) => {
+    weekViewState.delete(id);
+    if (uiContext.folderViewModes && typeof uiContext.folderViewModes === 'object' && uiContext.folderViewModes[id]) {
+      delete uiContext.folderViewModes[id];
+      viewModeContextChanged = true;
+    }
+  });
 
   if (descendants.has(state.ui.selectedFolderId)) {
     const fallback = parentId && parentId !== ARCHIVE_FOLDER_ID
@@ -2622,11 +3517,15 @@ function deleteFolder(folderId) {
   ensureSystemFolders(state);
   expandAncestors(state.ui.selectedFolderId);
   persistState();
+  if (viewModeContextChanged) {
+    void persistUiContext({ force: true });
+  }
   render();
 }
 
 function openFolderMenu(folderId, anchor) {
   closeAppMenu();
+  closeWeekMenu();
   folderMenuState.visible = true;
   folderMenuState.folderId = folderId;
   folderMenuAnchor = anchor;
@@ -2638,6 +3537,7 @@ function openFolderMenu(folderId, anchor) {
   if (deleteItem) {
     deleteItem.classList.toggle('hidden', PROTECTED_FOLDER_IDS.has(folderId));
   }
+  updateFolderMenuViewState(folderId);
   const rect = anchor.getBoundingClientRect();
   const width = menu.offsetWidth;
   menu.style.top = `${rect.bottom + window.scrollY + 6}px`;
@@ -2654,6 +3554,7 @@ function closeFolderMenu() {
 function openAppMenu(anchor) {
   appMenuState.visible = true;
   appMenuState.anchor = anchor;
+  closeWeekMenu();
 
   const menu = elements.appMenu;
   menu.classList.remove('hidden');
@@ -2704,6 +3605,96 @@ function handleAppMenuDocumentClick(event) {
   closeAppMenu();
 }
 
+function updateWeekMenuState(folderId = state.ui.selectedFolderId) {
+  if (!elements.weekMenu) {
+    return;
+  }
+  const toggleItem = elements.weekMenu.querySelector('[data-action="toggle-completed"]');
+  if (toggleItem) {
+    const showCompleted = getWeekShowCompleted(folderId);
+    toggleItem.textContent = showCompleted ? 'Скрыть выполненные' : 'Отображать выполненные';
+    toggleItem.setAttribute('aria-checked', String(showCompleted));
+  }
+}
+
+function openWeekMenu(anchor) {
+  if (!elements.weekMenu) {
+    return;
+  }
+  closeAppMenu();
+  closeFolderMenu();
+  weekMenuState.visible = true;
+  weekMenuState.anchor = anchor;
+  updateWeekMenuState();
+
+  const menu = elements.weekMenu;
+  menu.classList.remove('hidden');
+
+  const rect = anchor.getBoundingClientRect();
+  const width = menu.offsetWidth;
+  const offsetTop = rect.bottom + window.scrollY + 8;
+  const computedLeft = rect.right + window.scrollX - width;
+  const maxLeft = document.body.clientWidth - width - 16;
+  const minLeft = 16;
+
+  menu.style.top = `${offsetTop}px`;
+  menu.style.right = 'auto';
+  menu.style.left = `${Math.max(Math.min(computedLeft, maxLeft), minLeft)}px`;
+}
+
+function closeWeekMenu() {
+  if (!elements.weekMenu) {
+    return;
+  }
+  weekMenuState.visible = false;
+  weekMenuState.anchor = null;
+  elements.weekMenu.classList.add('hidden');
+}
+
+function handleWeekMenuToggle(event) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const anchor = event.currentTarget;
+  if (weekMenuState.visible && weekMenuState.anchor === anchor) {
+    closeWeekMenu();
+    return;
+  }
+  openWeekMenu(anchor);
+}
+
+function handleWeekMenuClick(event) {
+  const action = event.target.dataset.action;
+  if (!action) {
+    return;
+  }
+  if (action === 'toggle-completed') {
+    const folderId = state.ui.selectedFolderId;
+    if (folderId && isWeekViewActive(folderId)) {
+      setWeekShowCompleted(folderId, !getWeekShowCompleted(folderId));
+    }
+  } else if (action === 'carryover') {
+    moveUnfinishedTasksToNextWeek();
+  }
+  closeWeekMenu();
+}
+
+function handleWeekMenuDocumentClick(event) {
+  if (!weekMenuState.visible) {
+    return;
+  }
+
+  if (weekMenuState.anchor?.contains(event.target)) {
+    return;
+  }
+
+  if (elements.weekMenu?.contains(event.target)) {
+    return;
+  }
+
+  closeWeekMenu();
+}
+
 async function handleLogoutAction(event) {
   event.preventDefault();
   closeAppMenu();
@@ -2734,6 +3725,9 @@ function selectFolder(folderId, { openTasks = false, skipPersist = false } = {})
   }
 
   const previousFolderId = state.ui.selectedFolderId;
+  if (previousFolderId !== folderId) {
+    weekAutoScrollState.delete(folderId);
+  }
   const wasTasksScreen = currentScreen === 'tasks';
   const willAnimateWithinTasks = wasTasksScreen && previousFolderId !== folderId;
   const movingDeeper = willAnimateWithinTasks && previousFolderId ? isDescendantFolder(folderId, previousFolderId) : false;
@@ -2780,8 +3774,24 @@ function handleAddTaskInline({ forceComposerOnRoot = false } = {}) {
   }
 
   const usingFoldersList = currentScreen === 'folders';
-  const targetList = usingFoldersList ? elements.folderList : elements.taskList;
   const folderId = usingFoldersList ? null : state.ui.selectedFolderId;
+  const usingWeekView = !usingFoldersList && isWeekViewActive(folderId);
+  let targetList = usingFoldersList ? elements.folderList : elements.taskList;
+  let plannedFor;
+
+  if (usingWeekView) {
+    const weekStart = getWeekStartForFolder(folderId);
+    const selectedDate = getWeekSelectedDateForFolder(folderId, weekStart);
+    plannedFor = selectedDate ?? formatISODate(weekStart);
+    if (selectedDate) {
+      setWeekSelectedDateForFolder(folderId, selectedDate);
+    }
+    const list = getWeekDayListByDate(plannedFor);
+    if (!list) {
+      renderWeekView(folderId);
+    }
+    targetList = getWeekDayListByDate(plannedFor) || elements.taskList;
+  }
 
   if (inlineComposer && inlineComposer.targetList === targetList) {
     inlineComposer.input.focus({ preventScroll: true });
@@ -2797,13 +3807,14 @@ function handleAddTaskInline({ forceComposerOnRoot = false } = {}) {
   const composer = createInlineComposer({
     targetList,
     placeholder: 'Введите задачу',
-    folderId
+    folderId,
+    plannedFor
   });
   inlineComposer = composer;
 
   composer.element.scrollIntoView({ behavior: 'smooth', block: 'end' });
 
-  if (targetList === elements.taskList) {
+  if (targetList === elements.taskList || usingWeekView) {
     elements.emptyState.classList.remove('visible');
   }
 
@@ -2812,7 +3823,12 @@ function handleAddTaskInline({ forceComposerOnRoot = false } = {}) {
   });
 }
 
-function createInlineComposer({ targetList = elements.taskList, placeholder = 'Введите задачу', folderId = null } = {}) {
+function createInlineComposer({
+  targetList = elements.taskList,
+  placeholder = 'Введите задачу',
+  folderId = null,
+  plannedFor = undefined
+} = {}) {
   const item = document.createElement('li');
   item.className = 'entry-card task-item new-task';
   item.dataset.composer = 'true';
@@ -2885,7 +3901,7 @@ function createInlineComposer({ targetList = elements.taskList, placeholder = '�
   });
   targetList.appendChild(item);
 
-  return { element: item, input, targetList, folderId };
+  return { element: item, input, targetList, folderId, plannedFor };
 }
 
 function cancelInlineComposer(force = false) {
@@ -2917,7 +3933,11 @@ function commitInlineTask(rawTitle, { continueEntry = false } = {}) {
   inlineComposer = null;
   context.element.remove();
 
-  const createdId = createTask({ text: rawTitle, folderId: context.folderId });
+  const createdId = createTask({
+    text: rawTitle,
+    folderId: context.folderId,
+    plannedFor: context.plannedFor
+  });
 
   if (continueEntry) {
     requestAnimationFrame(() => {
@@ -2929,6 +3949,29 @@ function commitInlineTask(rawTitle, { continueEntry = false } = {}) {
 }
 
 function handleTaskListClick(event) {
+  if (isWeekViewActive()) {
+    const dayColumn = event.target.closest('.week-day');
+    const isoDate = dayColumn?.dataset?.date;
+    if (isoDate && isValidISODate(isoDate)) {
+      const isTaskClick = Boolean(event.target.closest('.task-item'));
+      const alreadySelected = dayColumn.classList.contains('is-selected-day');
+      if (alreadySelected && !isTaskClick) {
+        clearWeekSelectedDateForFolder(state.ui.selectedFolderId);
+        dayColumn.classList.remove('is-selected-day');
+      } else {
+        setWeekSelectedDateForFolder(state.ui.selectedFolderId, isoDate);
+        const currentSelected = elements.weekGrid?.querySelector('.week-day.is-selected-day');
+        if (currentSelected && currentSelected !== dayColumn) {
+          currentSelected.classList.remove('is-selected-day');
+        }
+        dayColumn.classList.add('is-selected-day');
+      }
+    } else {
+      clearWeekSelectedDateForFolder(state.ui.selectedFolderId);
+      const currentSelected = elements.weekGrid?.querySelector('.week-day.is-selected-day');
+      currentSelected?.classList.remove('is-selected-day');
+    }
+  }
   const menuButton = event.target.closest('.folder-menu-button');
   if (menuButton) {
     event.stopPropagation();
@@ -2980,16 +4023,27 @@ function handleTaskChange(event) {
   const item = event.target.closest('.task-item');
   if (!item) return;
   const taskId = item.dataset.taskId;
+  const weekViewActive = isWeekViewActive();
   let task = state.tasks.find((entry) => entry.id === taskId);
   let isArchivedContext = false;
 
-  if (!task && currentScreen === 'tasks' && state.ui.selectedFolderId === ARCHIVE_FOLDER_ID) {
+  if (!task && (weekViewActive || (currentScreen === 'tasks' && state.ui.selectedFolderId === ARCHIVE_FOLDER_ID))) {
     task = state.archivedTasks.find((entry) => entry.id === taskId);
     isArchivedContext = true;
   }
 
   if (!task) {
     render();
+    return;
+  }
+
+  if (weekViewActive) {
+    if (!task.completed && event.target.checked) {
+      event.target.disabled = true;
+      completeTask(taskId, item);
+    } else {
+      event.target.checked = false;
+    }
     return;
   }
 
@@ -3169,6 +4223,56 @@ function beginTaskEdit(titleNode) {
   }
 }
 
+function completeTaskInWeekView(taskId) {
+  const index = state.tasks.findIndex((entry) => entry.id === taskId);
+  if (index === -1) {
+    renderTasks();
+    return;
+  }
+
+  const [task] = state.tasks.splice(index, 1);
+  const timestamp = Date.now();
+  const archivedTask = {
+    ...task,
+    completed: true,
+    completedAt: timestamp,
+    updatedAt: timestamp
+  };
+  const existingIndex = state.archivedTasks.findIndex((entry) => entry.id === archivedTask.id);
+  if (existingIndex !== -1) {
+    state.archivedTasks.splice(existingIndex, 1);
+  }
+  state.archivedTasks.unshift(archivedTask);
+  persistState();
+  renderTasks();
+}
+
+function reopenTaskInWeekView(taskId) {
+  const index = state.archivedTasks.findIndex((entry) => entry.id === taskId);
+  if (index === -1) {
+    renderTasks();
+    return;
+  }
+
+  const [archivedTask] = state.archivedTasks.splice(index, 1);
+  const timestamp = Date.now();
+  const folderId = archivedTask.folderId;
+  const orders = state.tasks
+    .filter((entry) => entry.folderId === folderId && !entry.completed)
+    .map((entry) => entry.order ?? 0);
+  const nextOrder = orders.length ? Math.max(...orders) + 1 : 0;
+
+  state.tasks.push({
+    ...archivedTask,
+    completed: false,
+    completedAt: undefined,
+    updatedAt: timestamp,
+    order: nextOrder
+  });
+  persistState();
+  renderTasks();
+}
+
 
 function completeTask(taskId, item) {
   const index = state.tasks.findIndex((entry) => entry.id === taskId);
@@ -3252,7 +4356,54 @@ function removeCompletedTask(taskId, item) {
   });
 }
 
+function getSubfolderItems() {
+  if (!elements.taskList) {
+    return [];
+  }
+  return Array.from(elements.taskList.children)
+    .filter((node) => node instanceof HTMLElement && node.classList.contains('subfolder-item'));
+}
+
+function syncSubfolderOrderFromDom() {
+  const items = getSubfolderItems();
+  if (!items.length) {
+    return;
+  }
+  let index = 0;
+  items.forEach((node) => {
+    const id = node.dataset.folderId;
+    if (!id || PROTECTED_FOLDER_IDS.has(id)) {
+      return;
+    }
+    const folder = getFolderById(id);
+    if (!folder) {
+      return;
+    }
+    folder.order = index;
+    folder.updatedAt = Date.now();
+    index += 1;
+  });
+  persistState();
+}
+
 function handleDragStart(event) {
+  if (isWeekViewActive()) {
+    return;
+  }
+  const subfolderItem = event.target.closest('.subfolder-item');
+  if (subfolderItem) {
+    if (subfolderItem.classList.contains('is-readonly')) {
+      event.preventDefault();
+      return;
+    }
+    draggingSubfolderId = subfolderItem.dataset.folderId;
+    draggingSubfolderParentId = state.ui.selectedFolderId ?? null;
+    subfolderItem.classList.add('dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', draggingSubfolderId ?? '');
+    createDragGhost(subfolderItem, event);
+    return;
+  }
   const item = event.target.closest('.task-item');
   if (!item || item.dataset.composer || item.classList.contains('is-readonly')) {
     event.preventDefault();
@@ -3262,9 +4413,45 @@ function handleDragStart(event) {
   item.classList.add('dragging');
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('text/plain', draggingTaskId);
+  createDragGhost(item, event);
 }
 
 function handleDragOver(event) {
+  if (isWeekViewActive()) {
+    return;
+  }
+  if (draggingSubfolderId) {
+    event.preventDefault();
+    const draggingItem = elements.taskList.querySelector(
+      `.subfolder-item[data-folder-id="${draggingSubfolderId}"]`
+    );
+    if (!draggingItem) {
+      return;
+    }
+    const items = getSubfolderItems().filter((item) => item !== draggingItem);
+    if (!items.length) {
+      return;
+    }
+
+    let insertBefore = null;
+    for (const item of items) {
+      const rect = item.getBoundingClientRect();
+      if (event.clientY < rect.top + rect.height / 2) {
+        insertBefore = item;
+        break;
+      }
+    }
+
+    applyWeekFlip(elements.taskList, () => {
+      if (insertBefore) {
+        insertBefore.before(draggingItem);
+        return;
+      }
+      const lastItem = items[items.length - 1];
+      lastItem.after(draggingItem);
+    });
+    return;
+  }
   if (!draggingTaskId) return;
   event.preventDefault();
 
@@ -3273,7 +4460,9 @@ function handleDragOver(event) {
 
   const overItem = event.target.closest('.task-item');
   if (!overItem || overItem.dataset.composer) {
-    elements.taskList.appendChild(draggingItem);
+    applyWeekFlip(elements.taskList, () => {
+      elements.taskList.appendChild(draggingItem);
+    });
     return;
   }
 
@@ -3283,14 +4472,34 @@ function handleDragOver(event) {
 
   const overRect = overItem.getBoundingClientRect();
   const isAfter = event.clientY > overRect.top + overRect.height / 2;
-  if (isAfter) {
-    overItem.after(draggingItem);
-  } else {
-    overItem.before(draggingItem);
-  }
+  applyWeekFlip(elements.taskList, () => {
+    if (isAfter) {
+      overItem.after(draggingItem);
+    } else {
+      overItem.before(draggingItem);
+    }
+  });
 }
 
 function handleDragEnd() {
+  if (isWeekViewActive()) {
+    draggingTaskId = null;
+    draggingSubfolderId = null;
+    draggingSubfolderParentId = null;
+    return;
+  }
+  if (draggingSubfolderId) {
+    const draggingItem = elements.taskList.querySelector(
+      `.subfolder-item[data-folder-id="${draggingSubfolderId}"]`
+    );
+    draggingItem?.classList.remove('dragging');
+    syncSubfolderOrderFromDom();
+    renderTasks();
+    clearDragGhost();
+    draggingSubfolderId = null;
+    draggingSubfolderParentId = null;
+    return;
+  }
   const draggingItem = elements.taskList.querySelector(`[data-task-id="${draggingTaskId}"]`);
   if (draggingItem) {
     draggingItem.classList.remove('dragging');
@@ -3300,7 +4509,451 @@ function handleDragEnd() {
     syncTaskOrder();
     renderTasks();
   }
+  clearDragGhost();
   draggingTaskId = null;
+}
+
+function clearWeekDropTarget() {
+  if (weekDropTarget) {
+    weekDropTarget.classList.remove('is-drop-target');
+    weekDropTarget = null;
+  }
+}
+
+function createDragGhost(item, event) {
+  if (!item || !event?.dataTransfer) {
+    return;
+  }
+  const rect = item.getBoundingClientRect();
+  const ghost = item.cloneNode(true);
+  ghost.classList.add('drag-ghost');
+  ghost.classList.remove('dragging');
+  ghost.style.width = `${rect.width}px`;
+  ghost.style.height = `${rect.height}px`;
+  ghost.style.left = '-9999px';
+  ghost.style.top = '-9999px';
+  document.body.appendChild(ghost);
+
+  const offsetX = event.clientX - rect.left;
+  const offsetY = event.clientY - rect.top;
+  try {
+    event.dataTransfer.setDragImage(ghost, offsetX, offsetY);
+  } catch (error) {
+    // Ignore drag image errors in unsupported browsers.
+  }
+  dragGhost = ghost;
+}
+
+function clearDragGhost() {
+  if (dragGhost) {
+    dragGhost.remove();
+    dragGhost = null;
+  }
+}
+
+function captureFlipPositions(list) {
+  if (!list) {
+    return null;
+  }
+  const positions = new Map();
+  Array.from(list.children).forEach((item) => {
+    if (!(item instanceof HTMLElement) || item.classList.contains('dragging')) {
+      return;
+    }
+    positions.set(item, item.getBoundingClientRect());
+  });
+  return positions;
+}
+
+function playFlipAnimation(list, positions) {
+  if (!list || !positions) {
+    return;
+  }
+  Array.from(list.children).forEach((item) => {
+    if (!(item instanceof HTMLElement) || item.classList.contains('dragging')) {
+      return;
+    }
+    const first = positions.get(item);
+    if (!first) {
+      return;
+    }
+    const last = item.getBoundingClientRect();
+    const deltaX = first.left - last.left;
+    const deltaY = first.top - last.top;
+    if (!deltaX && !deltaY) {
+      return;
+    }
+    item.style.transition = 'transform 0s';
+    item.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+    requestAnimationFrame(() => {
+    item.style.transition = 'transform 220ms cubic-bezier(0.25, 0.8, 0.25, 1)';
+      item.style.transform = '';
+    });
+    const cleanup = () => {
+      item.style.transition = '';
+      item.removeEventListener('transitionend', cleanup);
+    };
+    item.addEventListener('transitionend', cleanup);
+  });
+}
+
+function applyWeekFlip(list, mutate) {
+  if (!list || typeof mutate !== 'function') {
+    return;
+  }
+  const positions = captureFlipPositions(list);
+  mutate();
+  playFlipAnimation(list, positions);
+}
+
+function getFolderBlockItems(item) {
+  if (!item) {
+    return [];
+  }
+  const block = [];
+  const baseDepth = Number(item.dataset.depth) || 0;
+  let cursor = item;
+  while (cursor) {
+    if (!(cursor instanceof HTMLElement) || !cursor.classList.contains('folder-item')) {
+      break;
+    }
+    if (cursor !== item) {
+      const depth = Number(cursor.dataset.depth) || 0;
+      if (depth <= baseDepth) {
+        break;
+      }
+    }
+    block.push(cursor);
+    cursor = cursor.nextElementSibling;
+  }
+  return block;
+}
+
+function getFolderSiblingsByParent(parentKey) {
+  if (!elements.folderList) {
+    return [];
+  }
+  return Array.from(elements.folderList.children)
+    .filter((node) => node instanceof HTMLElement && node.classList.contains('folder-item'))
+    .filter((node) => node.dataset.parentKey === parentKey);
+}
+
+function syncFolderOrderFromDom() {
+  if (!elements.folderList) {
+    return;
+  }
+  const indices = new Map();
+  const items = Array.from(elements.folderList.children)
+    .filter((node) => node instanceof HTMLElement && node.classList.contains('folder-item'));
+
+  items.forEach((node) => {
+    const id = node.dataset.folderId;
+    if (!id || PROTECTED_FOLDER_IDS.has(id)) {
+      return;
+    }
+    const parentKey = node.dataset.parentKey ?? 'root';
+    const folder = getFolderById(id);
+    if (!folder) {
+      return;
+    }
+    const index = indices.get(parentKey) ?? 0;
+    folder.order = index;
+    folder.updatedAt = Date.now();
+    indices.set(parentKey, index + 1);
+  });
+
+  persistState();
+}
+
+function handleFolderDragStart(event) {
+  const item = event.target.closest('.folder-item');
+  if (!item || item.classList.contains('is-readonly') || item.classList.contains('is-editing')) {
+    event.preventDefault();
+    return;
+  }
+  suppressFolderClickUntil = Date.now() + 500;
+  draggingFolderId = item.dataset.folderId;
+  draggingFolderParentKey = item.dataset.parentKey ?? 'root';
+  draggingFolderBlock = getFolderBlockItems(item);
+  draggingFolderAccepted = false;
+  draggingFolderBlock.forEach((node) => node.classList.add('dragging'));
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', draggingFolderId);
+  createDragGhost(item, event);
+}
+
+function handleFolderDragOver(event) {
+  if (!draggingFolderId) {
+    return;
+  }
+  event.preventDefault();
+  draggingFolderAccepted = true;
+
+  const draggingItem = elements.folderList.querySelector(`[data-folder-id="${draggingFolderId}"]`);
+  if (!draggingItem) {
+    return;
+  }
+
+  const hasLiveBlock = draggingFolderBlock?.length
+    && draggingFolderBlock.every((node) => node && node.isConnected);
+  const block = hasLiveBlock ? draggingFolderBlock : getFolderBlockItems(draggingItem);
+  if (!block.length) {
+    return;
+  }
+  if (!hasLiveBlock) {
+    draggingFolderBlock = block;
+  }
+  const siblings = getFolderSiblingsByParent(draggingFolderParentKey ?? 'root')
+    .filter((node) => !block.includes(node))
+    .filter((node) => !PROTECTED_FOLDER_IDS.has(node.dataset.folderId));
+
+  if (!siblings.length) {
+    return;
+  }
+
+  let insertBefore = null;
+  for (const sibling of siblings) {
+    const rect = sibling.getBoundingClientRect();
+    if (event.clientY < rect.top + rect.height / 2) {
+      insertBefore = sibling;
+      break;
+    }
+  }
+
+  applyWeekFlip(elements.folderList, () => {
+    const fragment = document.createDocumentFragment();
+    block.forEach((node) => fragment.appendChild(node));
+    if (insertBefore) {
+      insertBefore.before(fragment);
+      return;
+    }
+    const lastSibling = siblings[siblings.length - 1];
+    if (lastSibling) {
+      const lastBlock = getFolderBlockItems(lastSibling);
+      const insertAfter = lastBlock[lastBlock.length - 1] || lastSibling;
+      insertAfter.after(fragment);
+    } else {
+      elements.folderList.appendChild(fragment);
+    }
+  });
+}
+
+function handleFolderDrop(event) {
+  if (!draggingFolderId) {
+    return;
+  }
+  event.preventDefault();
+  suppressFolderClickUntil = Date.now() + 250;
+  draggingFolderAccepted = true;
+}
+
+function syncFolderOrder(parentKey) {
+  if (!parentKey) {
+    return;
+  }
+  const items = Array.from(elements.folderList.children)
+    .filter((node) => node instanceof HTMLElement && node.classList.contains('folder-item'))
+    .filter((node) => node.dataset.parentKey === parentKey);
+
+  let index = 0;
+  items.forEach((node) => {
+    const id = node.dataset.folderId;
+    if (!id || PROTECTED_FOLDER_IDS.has(id)) {
+      return;
+    }
+    const folder = getFolderById(id);
+    if (!folder) {
+      return;
+    }
+    folder.order = index;
+    folder.updatedAt = Date.now();
+    index += 1;
+  });
+
+  persistState();
+}
+
+function handleFolderDragEnd() {
+  if (!draggingFolderId) {
+    return;
+  }
+  if (draggingFolderBlock?.length) {
+    draggingFolderBlock.forEach((node) => node.classList.remove('dragging'));
+  } else {
+    const item = elements.folderList.querySelector(`[data-folder-id="${draggingFolderId}"]`);
+    item?.classList.remove('dragging');
+  }
+  if (!draggingFolderAccepted) {
+    draggingFolderAccepted = false;
+    clearDragGhost();
+    draggingFolderId = null;
+    draggingFolderParentKey = null;
+    draggingFolderBlock = null;
+    renderFolders();
+    return;
+  }
+  syncFolderOrderFromDom();
+  suppressFolderClickUntil = Date.now() + 250;
+  clearDragGhost();
+  draggingFolderId = null;
+  draggingFolderParentKey = null;
+  draggingFolderBlock = null;
+  draggingFolderAccepted = false;
+  renderFolders();
+}
+
+function handleWeekDragStart(event) {
+  const item = event.target.closest('.task-item');
+  if (!item || item.dataset.composer) {
+    event.preventDefault();
+    return;
+  }
+  draggingTaskId = item.dataset.taskId;
+  item.classList.add('dragging');
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', draggingTaskId);
+  createDragGhost(item, event);
+}
+
+function handleWeekDragOver(event) {
+  if (!draggingTaskId) {
+    return;
+  }
+  const dayColumn = event.target.closest('.week-day');
+  if (!dayColumn) {
+    clearWeekDropTarget();
+    return;
+  }
+  event.preventDefault();
+  const dayList = dayColumn.querySelector('.week-day-list');
+  const draggingItem = elements.weekView?.querySelector(`[data-task-id="${draggingTaskId}"]`);
+  if (!dayList || !draggingItem) {
+    return;
+  }
+
+  const sourceList = draggingItem.parentElement;
+  const sourcePositions = sourceList && sourceList !== dayList ? captureFlipPositions(sourceList) : null;
+  const overItem = event.target.closest('.task-item');
+  if (overItem && overItem !== draggingItem) {
+    const overRect = overItem.getBoundingClientRect();
+    const isAfter = event.clientY > overRect.top + overRect.height / 2;
+    applyWeekFlip(dayList, () => {
+      if (isAfter) {
+        overItem.after(draggingItem);
+      } else {
+        overItem.before(draggingItem);
+      }
+    });
+  } else {
+    if (draggingItem.parentElement !== dayList || !overItem) {
+      applyWeekFlip(dayList, () => {
+        dayList.appendChild(draggingItem);
+      });
+    }
+  }
+  if (sourcePositions && sourceList) {
+    playFlipAnimation(sourceList, sourcePositions);
+  }
+
+  if (weekDropTarget !== dayColumn) {
+    clearWeekDropTarget();
+    weekDropTarget = dayColumn;
+    weekDropTarget.classList.add('is-drop-target');
+  }
+}
+
+function handleWeekDrop(event) {
+  if (!draggingTaskId) {
+    return;
+  }
+  const dayColumn = event.target.closest('.week-day');
+  if (!dayColumn) {
+    return;
+  }
+  event.preventDefault();
+  const targetDate = dayColumn.dataset.date;
+  const dayList = dayColumn.querySelector('.week-day-list');
+  if (isValidISODate(targetDate)) {
+    let prevId = null;
+    let nextId = null;
+    if (dayList) {
+      const items = Array.from(dayList.querySelectorAll('.task-item'))
+        .filter((item) => item.dataset.taskId);
+      const index = items.findIndex((item) => item.dataset.taskId === draggingTaskId);
+      if (index !== -1) {
+        prevId = items[index - 1]?.dataset.taskId ?? null;
+        nextId = items[index + 1]?.dataset.taskId ?? null;
+      }
+    }
+    updateTaskPlannedFor(draggingTaskId, targetDate, { prevId, nextId });
+  }
+  const draggingItem = elements.weekView?.querySelector(`[data-task-id="${draggingTaskId}"]`);
+  draggingItem?.classList.remove('dragging');
+  clearWeekDropTarget();
+  clearDragGhost();
+  draggingTaskId = null;
+}
+
+function handleWeekDragEnd() {
+  if (draggingTaskId) {
+    const draggingItem = elements.weekView?.querySelector(`[data-task-id="${draggingTaskId}"]`);
+    draggingItem?.classList.remove('dragging');
+    renderTasks();
+  }
+  clearWeekDropTarget();
+  clearDragGhost();
+  draggingTaskId = null;
+}
+
+function updateTaskPlannedFor(taskId, plannedFor, { prevId = null, nextId = null } = {}) {
+  if (!taskId || !isValidISODate(plannedFor)) {
+    return;
+  }
+  const task = state.tasks.find((entry) => entry.id === taskId)
+    ?? state.archivedTasks.find((entry) => entry.id === taskId);
+  if (!task) {
+    return;
+  }
+  const prevTask = prevId
+    ? (state.tasks.find((entry) => entry.id === prevId) ?? state.archivedTasks.find((entry) => entry.id === prevId))
+    : null;
+  const nextTask = nextId
+    ? (state.tasks.find((entry) => entry.id === nextId) ?? state.archivedTasks.find((entry) => entry.id === nextId))
+    : null;
+  const prevOrder = Number.isFinite(prevTask?.order) ? prevTask.order : null;
+  const nextOrder = Number.isFinite(nextTask?.order) ? nextTask.order : null;
+  let nextOrderValue = task.order ?? 0;
+
+  if (prevOrder === null && nextOrder === null) {
+    const siblings = getTasksForWeekView(task.folderId)
+      .filter((entry) => entry.id !== task.id && normalizePlannedFor(entry.plannedFor) === plannedFor);
+    const maxOrder = siblings.reduce((acc, entry) => {
+      const value = Number.isFinite(entry.order) ? entry.order : acc;
+      return value > acc ? value : acc;
+    }, -Infinity);
+    nextOrderValue = Number.isFinite(maxOrder) ? maxOrder + 1 : 0;
+  } else if (prevOrder === null && nextOrder !== null) {
+    nextOrderValue = nextOrder - 1;
+  } else if (prevOrder !== null && nextOrder === null) {
+    nextOrderValue = prevOrder + 1;
+  } else if (prevOrder !== null && nextOrder !== null) {
+    nextOrderValue = prevOrder === nextOrder ? prevOrder + 0.5 : (prevOrder + nextOrder) / 2;
+  }
+
+  const plannedForChanged = task.plannedFor !== plannedFor;
+  const orderChanged = Number.isFinite(nextOrderValue) && task.order !== nextOrderValue;
+  if (!plannedForChanged && !orderChanged) {
+    return;
+  }
+
+  task.plannedFor = plannedFor;
+  if (Number.isFinite(nextOrderValue)) {
+    task.order = nextOrderValue;
+  }
+  task.updatedAt = Date.now();
+  rememberTaskPlannedFor(task.id, plannedFor);
+  persistState();
+  renderTasks();
 }
 
 function syncTaskOrder() {
@@ -3516,6 +5169,7 @@ function renderFolders() {
       const node = elements.folderTemplate.content.firstElementChild.cloneNode(true);
       node.dataset.folderId = folder.id;
       node.dataset.depth = String(depth);
+      node.dataset.parentKey = folder.parentId ?? 'root';
       node.style.setProperty('--depth', depth);
 
       const isSelected = state.ui.selectedFolderId === folder.id;
@@ -3557,6 +5211,9 @@ function renderFolders() {
 
       const isMenuHidden = folder.id === ALL_FOLDER_ID || folder.id === ARCHIVE_FOLDER_ID;
       menuButton.classList.toggle('hidden', isMenuHidden);
+      const isDraggable = !PROTECTED_FOLDER_IDS.has(folder.id) && editingFolderId !== folder.id;
+      node.setAttribute('draggable', String(isDraggable));
+      node.classList.toggle('is-readonly', !isDraggable);
 
       if (editingFolderId === folder.id) {
         node.classList.add('is-editing');
@@ -3664,6 +5321,7 @@ function renderRootFolders() {
     const node = elements.folderTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.folderId = folder.id;
     node.dataset.depth = '0';
+    node.dataset.parentKey = 'root';
     node.classList.remove('has-children', 'leaf', 'is-expanded');
     node.style.setProperty('--depth', 0);
     node.classList.toggle('is-selected', state.ui.selectedFolderId === folder.id && currentScreen === 'tasks');
@@ -3686,6 +5344,9 @@ function renderRootFolders() {
 
     const hideMenu = PROTECTED_FOLDER_IDS.has(folder.id);
     menuButton.classList.toggle('hidden', hideMenu);
+    const isDraggable = !PROTECTED_FOLDER_IDS.has(folder.id);
+    node.setAttribute('draggable', String(isDraggable));
+    node.classList.toggle('is-readonly', !isDraggable);
 
     fragment.appendChild(node);
   });
@@ -3718,7 +5379,9 @@ function renderRootFolders() {
       removeButton.classList.add('hidden');
     }
 
-    renderTaskTitle(title, task.text);
+    const body = node.querySelector('.task-body');
+    const previewHref = renderTaskLinkPreview(body, task.text);
+    renderTaskTitle(title, task.text, { previewHref });
     folderLabel.textContent = '';
     node.classList.remove('show-folder');
 
@@ -3750,11 +5413,257 @@ function toggleFolderExpansion(folderId, expand) {
   renderFolders();
 }
 
+function setTasksViewMode(viewMode) {
+  const isWeek = viewMode === VIEW_MODES.WEEK;
+  elements.taskList?.classList.toggle('hidden', isWeek);
+  elements.weekView?.classList.toggle('hidden', !isWeek);
+  elements.weekToolbar?.classList.toggle('hidden', !isWeek);
+  elements.weekMenuButton?.classList.toggle('hidden', !isWeek);
+  if (!isWeek) {
+    closeWeekMenu();
+  }
+}
+
+function getWeekDayListByDate(isoDate) {
+  if (!isoDate || !elements.weekGrid) {
+    return null;
+  }
+  return elements.weekGrid.querySelector(`.week-day-list[data-date="${isoDate}"]`);
+}
+
+function getTasksForWeekView(folderId) {
+  if (!folderId) {
+    return [];
+  }
+  const active = Array.isArray(state?.tasks) ? state.tasks : [];
+  if (getWeekShowCompleted(folderId)) {
+    const archived = Array.isArray(state?.archivedTasks) ? state.archivedTasks : [];
+    return active.concat(archived).filter((task) => task?.folderId === folderId);
+  }
+  return active.filter((task) => task?.folderId === folderId);
+}
+
+function updateWeekToolbar(weekStart) {
+  if (elements.weekRangeLabel) {
+    elements.weekRangeLabel.textContent = formatWeekRangeLabel(weekStart);
+  }
+  if (elements.weekTodayButton) {
+    const currentWeekStart = formatISODate(getStartOfISOWeek(new Date()));
+    elements.weekTodayButton.disabled = formatISODate(weekStart) === currentWeekStart;
+  }
+}
+
+function alignWeekGridToToday(folderId, weekStart) {
+  if (!elements.weekGrid || !folderId || !weekStart) {
+    return;
+  }
+  const today = new Date();
+  const currentWeekStart = formatISODate(getStartOfISOWeek(today));
+  if (formatISODate(weekStart) !== currentWeekStart) {
+    return;
+  }
+  if (weekAutoScrollState.get(folderId) === currentWeekStart) {
+    return;
+  }
+  const todayIso = formatISODate(today);
+  const column = elements.weekGrid.querySelector(`.week-day[data-date="${todayIso}"]`);
+  if (!column) {
+    return;
+  }
+  const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+  requestAnimationFrame(() => {
+    if (!elements.weekGrid || !column.isConnected) {
+      return;
+    }
+    const targetLeft = column.offsetLeft;
+    try {
+      elements.weekGrid.scrollTo({
+        left: targetLeft,
+        behavior: prefersReducedMotion ? 'auto' : 'smooth'
+      });
+    } catch (error) {
+      elements.weekGrid.scrollLeft = targetLeft;
+    }
+    weekAutoScrollState.set(folderId, currentWeekStart);
+  });
+}
+
+function renderWeekView(folderId = state.ui.selectedFolderId) {
+  if (!elements.weekGrid) {
+    return;
+  }
+
+  const weekStart = getWeekStartForFolder(folderId);
+  updateWeekToolbar(weekStart);
+  const selectedDate = getWeekSelectedDateForFolder(folderId, weekStart);
+  updateWeekMenuState(folderId);
+
+  const weekDates = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+  const tasksByDate = new Map();
+  weekDates.forEach((date) => {
+    tasksByDate.set(formatISODate(date), []);
+  });
+
+  getTasksForWeekView(folderId).forEach((task) => {
+    const plannedFor = normalizePlannedFor(task?.plannedFor);
+    if (!plannedFor || !tasksByDate.has(plannedFor)) {
+      return;
+    }
+    tasksByDate.get(plannedFor).push(task);
+  });
+
+  tasksByDate.forEach((items) => {
+    items.sort((a, b) => {
+      const orderA = Number.isFinite(a.order) ? a.order : 0;
+      const orderB = Number.isFinite(b.order) ? b.order : 0;
+      if (orderA === orderB) {
+        return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+      }
+      return orderA - orderB;
+    });
+  });
+
+  elements.weekGrid.innerHTML = '';
+  const fragment = document.createDocumentFragment();
+
+  weekDates.forEach((date) => {
+    const isoDate = formatISODate(date);
+    const column = document.createElement('div');
+    column.className = 'week-day';
+    column.dataset.date = isoDate;
+    if (selectedDate && isoDate === selectedDate) {
+      column.classList.add('is-selected-day');
+    }
+
+    const header = document.createElement('div');
+    header.className = 'week-day-header';
+    header.textContent = formatWeekdayLabel(date);
+
+    const list = document.createElement('ul');
+    list.className = 'week-day-list';
+    list.dataset.date = isoDate;
+    list.setAttribute('role', 'list');
+
+    (tasksByDate.get(isoDate) || []).forEach((task) => {
+      const node = elements.taskTemplate.content.firstElementChild.cloneNode(true);
+      node.dataset.taskId = task.id;
+      node.classList.remove('is-archive');
+      node.classList.toggle('is-completed', Boolean(task.completed));
+      node.setAttribute('draggable', 'true');
+
+      const title = node.querySelector('.task-title');
+      const folderLabel = node.querySelector('.task-folder-label');
+      const checkbox = node.querySelector('.checkbox input');
+
+      const body = node.querySelector('.task-body');
+      const previewHref = renderTaskLinkPreview(body, task.text);
+      renderTaskTitle(title, task.text, { previewHref });
+      title?.classList.toggle('completed', Boolean(task.completed));
+      folderLabel.textContent = '';
+      node.classList.remove('show-folder');
+
+      checkbox.checked = Boolean(task.completed);
+      checkbox.disabled = false;
+
+      list.appendChild(node);
+    });
+
+    column.append(header, list);
+    fragment.appendChild(column);
+  });
+
+  elements.weekGrid.appendChild(fragment);
+  alignWeekGridToToday(folderId, weekStart);
+}
+
+function shiftWeek(offset) {
+  const folderId = state.ui.selectedFolderId;
+  if (!isWeekViewActive(folderId)) {
+    return;
+  }
+  const current = getWeekStartForFolder(folderId);
+  const next = addDays(current, offset * 7);
+  setWeekStartForFolder(folderId, next);
+  renderTasks();
+}
+
+function jumpToCurrentWeek() {
+  const folderId = state.ui.selectedFolderId;
+  if (!isWeekViewActive(folderId)) {
+    return;
+  }
+  const current = getStartOfISOWeek(new Date());
+  setWeekStartForFolder(folderId, current);
+  renderTasks();
+}
+
+function moveUnfinishedTasksToNextWeek() {
+  const folderId = state.ui.selectedFolderId;
+  if (!isWeekViewActive(folderId)) {
+    return;
+  }
+  const weekStart = getWeekStartForFolder(folderId);
+  const nextWeekStart = addDays(weekStart, 7);
+  const nextMonday = formatISODate(nextWeekStart);
+  const tasksToMove = (state.tasks ?? [])
+    .filter((task) => task?.folderId === folderId && !task.completed)
+    .filter((task) => isISODateInWeek(normalizePlannedFor(task?.plannedFor), weekStart));
+
+  if (!tasksToMove.length) {
+    return;
+  }
+
+  const confirmed = window.confirm('Перенести все незавершённые задачи этой недели на следующий понедельник?');
+  if (!confirmed) {
+    return;
+  }
+
+  const timestamp = Date.now();
+  tasksToMove.forEach((task) => {
+    task.plannedFor = nextMonday;
+    task.updatedAt = timestamp;
+  });
+
+  if (!uiContext.taskPlannedFor || typeof uiContext.taskPlannedFor !== 'object') {
+    uiContext.taskPlannedFor = {};
+  }
+  tasksToMove.forEach((task) => {
+    uiContext.taskPlannedFor[task.id] = nextMonday;
+  });
+  void persistUiContext({ force: true });
+
+  persistState();
+  renderTasks();
+}
+
 function renderTasks() {
   cancelInlineComposer(true);
 
-  elements.taskList.innerHTML = '';
   const selectedFolder = state.ui.selectedFolderId;
+  const useWeekView = isWeekViewActive(selectedFolder);
+  setTasksViewMode(useWeekView ? VIEW_MODES.WEEK : VIEW_MODES.LIST);
+
+  if (useWeekView) {
+    elements.taskList.innerHTML = '';
+    renderWeekView(selectedFolder);
+    clearEmptyStateTimer();
+    elements.emptyState.classList.remove('visible');
+    showDefaultEmptyStateMessage();
+
+    if (currentScreen === 'tasks') {
+      renderTasksHeader(selectedFolder);
+    }
+
+    if (lastCreatedTaskId) {
+      focusTaskTitle(lastCreatedTaskId);
+      lastCreatedTaskId = null;
+    }
+
+    updateFloatingAction();
+    return;
+  }
+
+  elements.taskList.innerHTML = '';
   const isAllFolder = selectedFolder === ALL_FOLDER_ID;
 
   let tasks = [];
@@ -3826,8 +5735,11 @@ function renderTasks() {
       node.dataset.folderId = folder.id;
       node.classList.add('subfolder-item');
       node.dataset.depth = '1';
-      node.setAttribute('draggable', 'false');
       node.style.setProperty('--depth', 1);
+      const allowDrag = selectedFolder !== ALL_FOLDER_ID && selectedFolder !== ARCHIVE_FOLDER_ID;
+      const isDraggable = allowDrag && !PROTECTED_FOLDER_IDS.has(folder.id);
+      node.setAttribute('draggable', String(isDraggable));
+      node.classList.toggle('is-readonly', !isDraggable);
 
       const content = node.querySelector('.folder-content');
       const nameSpan = node.querySelector('.folder-name');
@@ -3868,7 +5780,9 @@ function renderTasks() {
     const folderLabel = node.querySelector('.task-folder-label');
     const checkbox = node.querySelector('.checkbox input');
 
-    renderTaskTitle(title, task.text);
+    const body = node.querySelector('.task-body');
+    const previewHref = renderTaskLinkPreview(body, task.text);
+    renderTaskTitle(title, task.text, { previewHref });
     if (showFolderLabels) {
       folderLabel.textContent = getFolderName(task.folderId);
       node.classList.add('show-folder');
@@ -3958,7 +5872,9 @@ function getFolderName(folderId) {
 
 function focusTaskTitle(taskId) {
   requestAnimationFrame(() => {
-    const node = elements.taskList.querySelector(`[data-task-id="${taskId}"] .task-title`);
+    const selector = `[data-task-id="${taskId}"] .task-title`;
+    const node = (isWeekViewActive() ? elements.weekView?.querySelector(selector) : null)
+      || elements.taskList.querySelector(selector);
     node?.focus({ preventScroll: true });
   });
 }
@@ -3976,7 +5892,7 @@ function persistState() {
   saveState(state);
 }
 
-function createTask({ text, folderId = undefined }) {
+function createTask({ text, folderId = undefined, plannedFor = undefined }) {
   const normalizedText = typeof text === 'string' ? text.trim() : '';
   if (!normalizedText) {
     return null;
@@ -3995,6 +5911,7 @@ function createTask({ text, folderId = undefined }) {
     .filter((task) => task.folderId === targetFolderId && !task.completed)
     .map((task) => task.order ?? 0);
   const nextOrder = orders.length ? Math.max(...orders) + 1 : 0;
+  const normalizedPlannedFor = normalizePlannedFor(plannedFor) ?? formatISODate(new Date());
 
   const id = uid();
   const now = Date.now();
@@ -4005,9 +5922,13 @@ function createTask({ text, folderId = undefined }) {
     completed: false,
     createdAt: now,
     updatedAt: now,
-    order: nextOrder
+    order: nextOrder,
+    ...(normalizedPlannedFor ? { plannedFor: normalizedPlannedFor } : {})
   });
 
+  if (normalizedPlannedFor) {
+    rememberTaskPlannedFor(id, normalizedPlannedFor);
+  }
   lastCreatedTaskId = id;
   persistState();
   render();

@@ -10,6 +10,7 @@
     --shadow-soft: 0 18px 40px rgba(0, 0, 0, 0.1);
     --shadow-strong: 0 22px 50px rgba(0, 0, 0, 0.2);
     --folder-menu: rgba(49, 52, 70, 0.9);
+    --task-drag-bg: #1f2430;
 
     --text-primary: rgba(240, 242, 250, 0.95);
     --text-secondary: rgba(240, 242, 250, 0.7);
@@ -59,6 +60,7 @@
   --shadow-soft: 0 18px 40px rgba(0, 0, 0, 0.1);
   --shadow-strong: 0 22px 50px rgba(0, 0, 0, 0.2);
   --folder-menu: rgba(49, 52, 70, 0.9);
+  --task-drag-bg: #1f2430;
 
   --text-primary: rgba(240, 242, 250, 0.95);
   --text-secondary: rgba(240, 242, 250, 0.7);

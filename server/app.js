@@ -10,6 +10,7 @@ import { createAuthHelpers } from './middleware/auth.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createStateRouter } from './routes/state.js';
 import { createDebugRouter } from './routes/debug.js';
+import { createPreviewRouter } from './routes/preview.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -45,6 +46,9 @@ export function createServerApp({ config, collections }) {
     userService: services.userService,
     sessionService: services.sessionService,
     stateService: services.stateService
+  });
+  const previewRouter = createPreviewRouter({
+    authHelpers
   });
 
   app.use(cors({
@@ -82,6 +86,9 @@ export function createServerApp({ config, collections }) {
 
   app.use('/api/auth', authRouter);
   app.use('/web/api/auth', authRouter);
+
+  app.use('/api', previewRouter);
+  app.use('/web/api', previewRouter);
 
   app.use('/', stateRouter);
   app.use('/web', stateRouter);
