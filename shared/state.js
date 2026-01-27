@@ -75,6 +75,17 @@ function normalizeFolder(folder, index, timestamp, fallbackParentId = FOLDER_IDS
     ? folder.icon.trim()
     : DEFAULT_ICON;
   const viewMode = VALID_VIEW_MODES.has(folder.viewMode) ? folder.viewMode : 'list';
+  const passwordHash = typeof folder.passwordHash === 'string' && folder.passwordHash.trim()
+    ? folder.passwordHash.trim()
+    : undefined;
+  const passwordSalt = typeof folder.passwordSalt === 'string' && folder.passwordSalt.trim()
+    ? folder.passwordSalt.trim()
+    : undefined;
+  const passwordHint = typeof folder.passwordHint === 'string'
+    ? folder.passwordHint.trim()
+    : '';
+  const hasHint = Boolean(passwordHint);
+  const isLocked = Boolean(passwordHash && passwordSalt);
 
   return {
     id,
@@ -84,7 +95,11 @@ function normalizeFolder(folder, index, timestamp, fallbackParentId = FOLDER_IDS
     updatedAt,
     order,
     icon,
-    viewMode
+    viewMode,
+    ...(passwordHash ? { passwordHash } : {}),
+    ...(passwordSalt ? { passwordSalt } : {}),
+    ...(hasHint ? { passwordHint } : {}),
+    isLocked
   };
 }
 

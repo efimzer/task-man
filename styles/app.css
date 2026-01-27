@@ -434,6 +434,24 @@ body::before {
   text-overflow: ellipsis;
 }
 
+.folder-lock-icon {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  flex: 0 0 auto;
+}
+
+.folder-lock-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.folder-item.is-locked .folder-lock-icon {
+  display: inline-flex;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -848,8 +866,8 @@ body::before {
 
 .link-preview-media {
   position: relative;
-  width: 104px;
-  height: 78px;
+  width: 180px;
+  height: 110px;
   border-radius: 10px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.08);
@@ -1238,21 +1256,21 @@ body::before {
 }
 
 @media (min-width: 960px) {
-  body {
+  body.is-week-wide {
     padding-inline: clamp(20px, 2.5vw, 30px);
   }
 
-  .app-shell {
+  body.is-week-wide .app-shell {
     width: 100%;
     max-width: none;
   }
 
-  .screen-header,
-  .tasks-header {
+  body.is-week-wide .screen-header,
+  body.is-week-wide .tasks-header {
     margin-inline: 0;
   }
 
-  .week-toolbar {
+  body.is-week-wide .week-toolbar {
     margin-inline: 0;
   }
 }
@@ -1317,6 +1335,12 @@ body::before {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+.modal-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .modal-actions {

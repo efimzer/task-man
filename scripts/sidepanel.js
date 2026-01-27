@@ -38,6 +38,8 @@ const VIEW_MODES = Object.freeze({
 const VALID_VIEW_MODES = new Set(Object.values(VIEW_MODES));
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const LINK_PREVIEW_TTL = 12 * 60 * 60 * 1000;
+const PASSWORD_MIN_LENGTH = 2;
+const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
 
 let uiContext = createDefaultUiContext();
 let uiContextReady = false;
@@ -84,12 +86,16 @@ let manualSyncInFlight = false;
 let state = null;
 let startupLoaderActive = false;
 let folderModalParentId = null;
+let passwordModalState = { mode: null, folderId: null, busy: false };
+let unlockModalState = { folderId: null, busy: false };
+let inactivityTimer = null;
 let fabPressTimer = null;
 let fabLongPressTriggered = false;
 let suppressNextFabClick = false;
 const weekViewState = new Map();
 const weekAutoScrollState = new Map();
 const linkPreviewCache = new Map();
+const unlockedFolderIds = new Set();
 
 function supportsWebkitHaptics() {
   return typeof window !== 'undefined' && typeof window.webkit?.playHaptic === 'function';
@@ -507,6 +513,17 @@ function ensureSystemFolders(state) {
     const order = Number.isFinite(folder.order) ? folder.order : index;
     const icon = typeof folder.icon === 'string' && folder.icon.trim() ? folder.icon.trim() : null;
     const viewMode = VALID_VIEW_MODES.has(folder.viewMode) ? folder.viewMode : VIEW_MODES.LIST;
+    const passwordHash = typeof folder.passwordHash === 'string' && folder.passwordHash.trim()
+      ? folder.passwordHash.trim()
+      : undefined;
+    const passwordSalt = typeof folder.passwordSalt === 'string' && folder.passwordSalt.trim()
+      ? folder.passwordSalt.trim()
+      : undefined;
+    const passwordHint = typeof folder.passwordHint === 'string'
+      ? folder.passwordHint.trim()
+      : '';
+    const hasHint = Boolean(passwordHint);
+    const isLocked = Boolean(passwordHash && passwordSalt);
 
     map.set(id, {
       id,
@@ -516,7 +533,11 @@ function ensureSystemFolders(state) {
       updatedAt,
       order,
       icon,
-      viewMode
+      viewMode,
+      ...(passwordHash ? { passwordHash } : {}),
+      ...(passwordSalt ? { passwordSalt } : {}),
+      ...(hasHint ? { passwordHint } : {}),
+      isLocked
     });
   });
 
@@ -590,6 +611,95 @@ function getFolderById(folderId) {
     return null;
   }
   return state.folders.find((folder) => folder.id === folderId) ?? null;
+}
+
+function getFolderLockKey(folderId) {
+  if (!folderId) {
+    return null;
+  }
+  return `folder:${folderId}`;
+}
+
+function folderHasPassword(folder) {
+  return Boolean(folder?.passwordHash && folder?.passwordSalt);
+}
+
+function isFolderLocked(folderId) {
+  const folder = getFolderById(folderId);
+  return folderHasPassword(folder);
+}
+
+function isFolderUnlocked(folderId) {
+  const key = getFolderLockKey(folderId);
+  if (!key) {
+    return false;
+  }
+  return unlockedFolderIds.has(key);
+}
+
+function setFolderUnlocked(folderId, unlocked) {
+  const key = getFolderLockKey(folderId);
+  if (!key) {
+    return;
+  }
+  if (unlocked) {
+    unlockedFolderIds.add(key);
+  } else {
+    unlockedFolderIds.delete(key);
+  }
+}
+
+function requiresFolderUnlock(folderId) {
+  if (!folderId || folderId === ALL_FOLDER_ID || folderId === ARCHIVE_FOLDER_ID) {
+    return false;
+  }
+  return isFolderLocked(folderId) && !isFolderUnlocked(folderId);
+}
+
+function lockFolderIfNeeded(folderId) {
+  if (!folderId) {
+    return false;
+  }
+  if (isFolderLocked(folderId) && isFolderUnlocked(folderId)) {
+    setFolderUnlocked(folderId, false);
+    return true;
+  }
+  return false;
+}
+
+function lockAllFolders() {
+  if (!unlockedFolderIds.size) {
+    return false;
+  }
+  unlockedFolderIds.clear();
+  return true;
+}
+
+function handleInactivityTimeout() {
+  const changed = lockAllFolders();
+  if (!changed) {
+    return;
+  }
+  if (currentScreen === 'tasks' && requiresFolderUnlock(state?.ui?.selectedFolderId)) {
+    render();
+    return;
+  }
+  if (currentScreen === 'folders') {
+    renderFolders();
+    return;
+  }
+  render();
+}
+
+function scheduleInactivityLock() {
+  if (inactivityTimer) {
+    clearTimeout(inactivityTimer);
+  }
+  inactivityTimer = setTimeout(handleInactivityTimeout, INACTIVITY_TIMEOUT);
+}
+
+function handleUserActivity() {
+  scheduleInactivityLock();
 }
 
 function getFolderViewMode(folderId) {
@@ -819,6 +929,38 @@ function updateFolderMenuViewState(folderId) {
   weekItem.classList.toggle('is-selected', viewMode === VIEW_MODES.WEEK);
   listItem.setAttribute('aria-checked', String(viewMode === VIEW_MODES.LIST));
   weekItem.setAttribute('aria-checked', String(viewMode === VIEW_MODES.WEEK));
+}
+
+function updateFolderMenuLockState(folderId) {
+  if (!elements.folderMenu) {
+    return;
+  }
+  const setItem = elements.folderMenu.querySelector('[data-action="password-set"]');
+  const changeItem = elements.folderMenu.querySelector('[data-action="password-change"]');
+  const removeItem = elements.folderMenu.querySelector('[data-action="password-remove"]');
+  const lockItem = elements.folderMenu.querySelector('[data-action="lock-again"]');
+  const divider = elements.folderMenu.querySelector('[data-divider="password"]');
+
+  if (PROTECTED_FOLDER_IDS.has(folderId)) {
+    setItem?.classList.add('hidden');
+    changeItem?.classList.add('hidden');
+    removeItem?.classList.add('hidden');
+    lockItem?.classList.add('hidden');
+    divider?.classList.add('hidden');
+    return;
+  }
+
+  const locked = isFolderLocked(folderId);
+  const unlocked = isFolderUnlocked(folderId);
+
+  setItem?.classList.toggle('hidden', locked);
+  changeItem?.classList.toggle('hidden', !locked);
+  removeItem?.classList.toggle('hidden', !locked);
+  lockItem?.classList.toggle('hidden', !(locked && unlocked));
+
+  const anyVisible = [setItem, changeItem, removeItem, lockItem]
+    .some((item) => item && !item.classList.contains('hidden'));
+  divider?.classList.toggle('hidden', !anyVisible);
 }
 
 function expandAncestors(folderId) {
@@ -1195,6 +1337,40 @@ function formatWeekRangeLabel(startDate) {
 
 function normalizePlannedFor(value) {
   return isValidISODate(value) ? value : undefined;
+}
+
+function bufferToHex(buffer) {
+  return Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function generatePasswordSalt(byteLength = 16) {
+  if (typeof crypto?.getRandomValues !== 'function') {
+    const fallback = Array.from({ length: byteLength }, () => Math.floor(Math.random() * 256));
+    return fallback.map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function hashPasswordWithSalt(password, salt) {
+  if (!crypto?.subtle || typeof TextEncoder === 'undefined') {
+    throw new Error('Crypto unavailable');
+  }
+  const encoder = new TextEncoder();
+  const data = encoder.encode(`${salt}:${password}`);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return bufferToHex(digest);
+}
+
+async function verifyFolderPassword(folder, password) {
+  if (!folderHasPassword(folder)) {
+    return false;
+  }
+  const hash = await hashPasswordWithSalt(password, folder.passwordSalt);
+  return hash === folder.passwordHash;
 }
 
 function rememberTaskPlannedFor(taskId, plannedFor) {
@@ -2153,12 +2329,12 @@ function renderTasksHeader(folderId) {
       span.tabIndex = 0;
       span.setAttribute('role', 'button');
       span.addEventListener('click', () => {
-        selectFolder(targetId, { openTasks: true });
+        openFolderWithUnlock(targetId, { openTasks: true });
       });
       span.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          selectFolder(targetId, { openTasks: true });
+          openFolderWithUnlock(targetId, { openTasks: true });
         }
       });
     }
@@ -2379,6 +2555,26 @@ const elements = {
   folderModalForm: document.getElementById('folderModalForm'),
   folderModalInput: document.getElementById('folderModalInput'),
   folderModalCancel: document.getElementById('folderModalCancel'),
+  folderUnlockModal: document.getElementById('folderUnlockModal'),
+  folderUnlockForm: document.getElementById('folderUnlockForm'),
+  folderUnlockInput: document.getElementById('folderUnlockInput'),
+  folderUnlockCancel: document.getElementById('folderUnlockCancel'),
+  folderUnlockError: document.getElementById('folderUnlockError'),
+  folderUnlockHint: document.getElementById('folderUnlockHint'),
+  folderPasswordModal: document.getElementById('folderPasswordModal'),
+  folderPasswordForm: document.getElementById('folderPasswordForm'),
+  folderPasswordTitle: document.getElementById('folderPasswordTitle'),
+  folderPasswordCurrent: document.getElementById('folderPasswordCurrent'),
+  folderPasswordNew: document.getElementById('folderPasswordNew'),
+  folderPasswordConfirm: document.getElementById('folderPasswordConfirm'),
+  folderPasswordHint: document.getElementById('folderPasswordHint'),
+  folderPasswordCancel: document.getElementById('folderPasswordCancel'),
+  folderPasswordSubmit: document.getElementById('folderPasswordSubmit'),
+  folderPasswordError: document.getElementById('folderPasswordError'),
+  folderPasswordCurrentField: document.getElementById('folderPasswordCurrentField'),
+  folderPasswordNewField: document.getElementById('folderPasswordNewField'),
+  folderPasswordConfirmField: document.getElementById('folderPasswordConfirmField'),
+  folderPasswordHintField: document.getElementById('folderPasswordHintField'),
   taskList: document.getElementById('taskList'),
   taskTemplate: document.getElementById('taskTemplate'),
   weekToolbar: document.getElementById('weekToolbar'),
@@ -2528,7 +2724,11 @@ if (authStore.getToken() || hasSessionCookie()) {
 
 elements.folderModalForm.addEventListener('submit', handleFolderModalSubmit);
 elements.folderModalCancel.addEventListener('click', closeFolderModal);
-elements.modalBackdrop.addEventListener('click', closeFolderModal);
+elements.folderUnlockForm?.addEventListener('submit', handleFolderUnlockSubmit);
+elements.folderUnlockCancel?.addEventListener('click', closeFolderUnlockModal);
+elements.folderPasswordForm?.addEventListener('submit', handleFolderPasswordSubmit);
+elements.folderPasswordCancel?.addEventListener('click', closeFolderPasswordModal);
+elements.modalBackdrop.addEventListener('click', closeActiveModal);
 elements.authForm?.addEventListener('submit', handleAuthSubmit);
 elements.authToggleMode?.addEventListener('click', toggleAuthMode);
 
@@ -2975,15 +3175,37 @@ elements.weekMenu?.addEventListener('click', handleWeekMenuClick);
 elements.backButton.addEventListener('click', handleBackNavigation);
 
 document.addEventListener('keydown', handleGlobalKeydown);
+scheduleInactivityLock();
+const ACTIVITY_EVENTS = [
+  'mousemove',
+  'mousedown',
+  'keydown',
+  'touchstart',
+  'scroll',
+  'wheel',
+  'pointerdown'
+];
+const PASSIVE_ACTIVITY_EVENTS = new Set(['mousemove', 'mousedown', 'touchstart', 'scroll', 'wheel', 'pointerdown']);
+ACTIVITY_EVENTS.forEach((eventName) => {
+  document.addEventListener(
+    eventName,
+    handleUserActivity,
+    PASSIVE_ACTIVITY_EVENTS.has(eventName) ? { passive: true } : undefined
+  );
+});
 
 function handleGlobalKeydown(event) {
   if (event.key === 'Escape') {
     if (appMenuState.visible) {
       closeAppMenu();
     }
-    if (!elements.folderModal.classList.contains('hidden')) {
+    if (
+      !elements.folderModal.classList.contains('hidden')
+      || (elements.folderUnlockModal && !elements.folderUnlockModal.classList.contains('hidden'))
+      || (elements.folderPasswordModal && !elements.folderPasswordModal.classList.contains('hidden'))
+    ) {
       event.preventDefault();
-      closeFolderModal();
+      closeActiveModal();
     }
     return;
   }
@@ -3001,6 +3223,48 @@ function handleGlobalKeydown(event) {
       createFolderViaShortcut();
     }
     return;
+  }
+
+  if (!isEditable && currentScreen === 'tasks' && isWeekViewActive()) {
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      return;
+    }
+
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      shiftWeek(-1);
+      return;
+    }
+
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      shiftWeek(1);
+      return;
+    }
+
+    if (lowerKey === 't' || lowerKey === 'е') {
+      event.preventDefault();
+      jumpToCurrentWeek();
+      return;
+    }
+
+    if (event.key && /^[1-7]$/.test(event.key)) {
+      event.preventDefault();
+      const folderId = state.ui.selectedFolderId;
+      const weekStart = getWeekStartForFolder(folderId);
+      const dayIndex = Number(event.key) - 1;
+      const targetDate = addDays(weekStart, dayIndex);
+      const isoDate = formatISODate(targetDate);
+      setWeekSelectedDateForFolder(folderId, isoDate);
+      const currentSelected = elements.weekGrid?.querySelector('.week-day.is-selected-day');
+      if (currentSelected && currentSelected.dataset?.date !== isoDate) {
+        currentSelected.classList.remove('is-selected-day');
+      }
+      const dayColumn = elements.weekGrid?.querySelector(`.week-day[data-date="${isoDate}"]`);
+      dayColumn?.classList.add('is-selected-day');
+      scrollWeekGridToDate(isoDate);
+      return;
+    }
   }
 
   if (event.key !== 'Enter' || isEditable) {
@@ -3041,7 +3305,7 @@ function handleBackNavigation() {
 
   const parentId = currentFolder.parentId;
   if (parentId && parentId !== ALL_FOLDER_ID) {
-    selectFolder(parentId, { openTasks: true });
+    openFolderWithUnlock(parentId, { openTasks: true });
     return;
   }
 
@@ -3064,6 +3328,9 @@ function showScreen(screenName, { skipPersist = false } = {}) {
     if (!skipPersist && state.ui.activeScreen !== screenName) {
       state.ui.activeScreen = screenName;
       persistState();
+    }
+    if (screenName === 'folders') {
+      document.body?.classList.remove('is-week-wide');
     }
     if (screenName !== 'folders') {
       resetPullToRefresh({ immediate: true });
@@ -3097,6 +3364,8 @@ function showScreen(screenName, { skipPersist = false } = {}) {
   if (screenName === 'folders') {
     cancelInlineComposer(true);
     closeFolderMenu();
+    document.body?.classList.remove('is-week-wide');
+    lockFolderIfNeeded(state.ui.selectedFolderId);
   }
 
   state.ui.activeScreen = screenName;
@@ -3106,6 +3375,12 @@ function showScreen(screenName, { skipPersist = false } = {}) {
   }
   renderFolders();
   updateFloatingAction();
+
+  if (screenName === 'tasks' && requiresFolderUnlock(state.ui.selectedFolderId)) {
+    if (unlockModalState.folderId !== state.ui.selectedFolderId) {
+      openFolderUnlockModal(state.ui.selectedFolderId);
+    }
+  }
 }
 
 function openFolderModal({ parentId = null, initialName = '' } = {}) {
@@ -3136,6 +3411,55 @@ function closeFolderModal() {
   elements.folderModal.addEventListener('transitionend', hide, { once: true });
 }
 
+function showModal(modal, focusTarget) {
+  if (!modal) {
+    return;
+  }
+  modal.classList.remove('hidden');
+  elements.modalBackdrop.classList.remove('hidden');
+  requestAnimationFrame(() => {
+    modal.classList.add('show');
+    elements.modalBackdrop.classList.add('show');
+    if (focusTarget) {
+      focusTarget.focus({ preventScroll: true });
+      if (typeof focusTarget.select === 'function') {
+        focusTarget.select();
+      }
+    }
+  });
+}
+
+function hideModal(modal, onHidden) {
+  if (!modal) {
+    return;
+  }
+  modal.classList.remove('show');
+  elements.modalBackdrop.classList.remove('show');
+  const hide = () => {
+    modal.classList.add('hidden');
+    elements.modalBackdrop.classList.add('hidden');
+    modal.removeEventListener('transitionend', hide);
+    if (typeof onHidden === 'function') {
+      onHidden();
+    }
+  };
+  modal.addEventListener('transitionend', hide, { once: true });
+}
+
+function closeActiveModal() {
+  if (elements.folderUnlockModal && !elements.folderUnlockModal.classList.contains('hidden')) {
+    closeFolderUnlockModal();
+    return;
+  }
+  if (elements.folderPasswordModal && !elements.folderPasswordModal.classList.contains('hidden')) {
+    closeFolderPasswordModal();
+    return;
+  }
+  if (elements.folderModal && !elements.folderModal.classList.contains('hidden')) {
+    closeFolderModal();
+  }
+}
+
 function handleFolderModalSubmit(event) {
   event.preventDefault();
   const title = elements.folderModalInput.value.trim();
@@ -3163,6 +3487,263 @@ function handleFolderModalSubmit(event) {
   addFolder(title, { parentId: folderModalParentId });
   folderModalParentId = null;
   closeFolderModal();
+}
+
+function setFolderUnlockError(message) {
+  if (elements.folderUnlockError) {
+    elements.folderUnlockError.textContent = message ?? '';
+  }
+}
+
+function setFolderPasswordError(message) {
+  if (elements.folderPasswordError) {
+    elements.folderPasswordError.textContent = message ?? '';
+  }
+}
+
+function setFolderPasswordBusy(isBusy) {
+  passwordModalState.busy = Boolean(isBusy);
+  if (elements.folderPasswordSubmit) {
+    elements.folderPasswordSubmit.disabled = Boolean(isBusy);
+  }
+  elements.folderPasswordForm?.setAttribute('aria-busy', String(Boolean(isBusy)));
+}
+
+function setFolderUnlockBusy(isBusy) {
+  unlockModalState.busy = Boolean(isBusy);
+  const submitButton = elements.folderUnlockForm?.querySelector('button[type="submit"]');
+  if (submitButton) {
+    submitButton.disabled = Boolean(isBusy);
+  }
+  elements.folderUnlockForm?.setAttribute('aria-busy', String(Boolean(isBusy)));
+}
+
+function openFolderUnlockModal(folderId) {
+  const folder = getFolderById(folderId);
+  if (!folder || !folderHasPassword(folder)) {
+    return;
+  }
+  closeFolderMenu();
+  closeAppMenu();
+  closeWeekMenu();
+  unlockModalState = { folderId, busy: false };
+  if (elements.folderUnlockInput) {
+    elements.folderUnlockInput.value = '';
+  }
+  setFolderUnlockError('');
+  if (elements.folderUnlockHint) {
+    const hint = folder.passwordHint;
+    if (hint) {
+      elements.folderUnlockHint.textContent = hint;
+      elements.folderUnlockHint.classList.remove('hidden');
+    } else {
+      elements.folderUnlockHint.textContent = '';
+      elements.folderUnlockHint.classList.add('hidden');
+    }
+  }
+  setFolderUnlockBusy(false);
+  showModal(elements.folderUnlockModal, elements.folderUnlockInput);
+}
+
+function closeFolderUnlockModal() {
+  if (!elements.folderUnlockModal || elements.folderUnlockModal.classList.contains('hidden')) {
+    return;
+  }
+  hideModal(elements.folderUnlockModal, () => {
+    unlockModalState = { folderId: null, busy: false };
+  });
+}
+
+function applyFolderPasswordUpdate(folder, { hash, salt, hint } = {}) {
+  const nextHash = typeof hash === 'string' && hash.trim() ? hash.trim() : null;
+  const nextSalt = typeof salt === 'string' && salt.trim() ? salt.trim() : null;
+  const nextHint = typeof hint === 'string' ? hint.trim() : '';
+
+  if (nextHash && nextSalt) {
+    folder.passwordHash = nextHash;
+    folder.passwordSalt = nextSalt;
+  } else {
+    delete folder.passwordHash;
+    delete folder.passwordSalt;
+  }
+
+  if (nextHint) {
+    folder.passwordHint = nextHint;
+  } else {
+    delete folder.passwordHint;
+  }
+
+  folder.isLocked = Boolean(nextHash && nextSalt);
+  folder.updatedAt = Date.now();
+  ensureSystemFolders(state);
+  persistState();
+  if (syncManager?.enabled) {
+    void syncManager.forcePush();
+  }
+  render();
+}
+
+function openFolderPasswordModal(folderId, mode) {
+  const folder = getFolderById(folderId);
+  if (!folder) {
+    return;
+  }
+  closeFolderMenu();
+  closeAppMenu();
+  closeWeekMenu();
+  passwordModalState = { mode, folderId, busy: false };
+
+  const showCurrent = mode === 'change' || mode === 'remove';
+  const showNew = mode === 'set' || mode === 'change';
+  const showConfirm = mode === 'set' || mode === 'change';
+  const showHint = mode === 'set' || mode === 'change';
+
+  elements.folderPasswordCurrentField?.classList.toggle('hidden', !showCurrent);
+  elements.folderPasswordNewField?.classList.toggle('hidden', !showNew);
+  elements.folderPasswordConfirmField?.classList.toggle('hidden', !showConfirm);
+  elements.folderPasswordHintField?.classList.toggle('hidden', !showHint);
+
+  if (elements.folderPasswordTitle) {
+    elements.folderPasswordTitle.textContent = mode === 'remove'
+      ? 'Снять пароль'
+      : mode === 'change'
+        ? 'Изменить пароль'
+        : 'Установить пароль';
+  }
+  if (elements.folderPasswordSubmit) {
+    elements.folderPasswordSubmit.textContent = mode === 'remove' ? 'Снять' : 'Сохранить';
+  }
+
+  if (elements.folderPasswordCurrent) {
+    elements.folderPasswordCurrent.value = '';
+  }
+  if (elements.folderPasswordNew) {
+    elements.folderPasswordNew.value = '';
+  }
+  if (elements.folderPasswordConfirm) {
+    elements.folderPasswordConfirm.value = '';
+  }
+  if (elements.folderPasswordHint) {
+    elements.folderPasswordHint.value = showHint ? (folder.passwordHint ?? '') : '';
+  }
+  setFolderPasswordError('');
+  setFolderPasswordBusy(false);
+
+  const focusTarget = showCurrent ? elements.folderPasswordCurrent : elements.folderPasswordNew;
+  showModal(elements.folderPasswordModal, focusTarget);
+}
+
+function closeFolderPasswordModal() {
+  if (!elements.folderPasswordModal || elements.folderPasswordModal.classList.contains('hidden')) {
+    return;
+  }
+  hideModal(elements.folderPasswordModal, () => {
+    passwordModalState = { mode: null, folderId: null, busy: false };
+  });
+}
+
+async function handleFolderUnlockSubmit(event) {
+  event.preventDefault();
+  if (unlockModalState.busy) {
+    return;
+  }
+  const folderId = unlockModalState.folderId;
+  const folder = getFolderById(folderId);
+  if (!folder || !folderHasPassword(folder)) {
+    closeFolderUnlockModal();
+    return;
+  }
+  const password = elements.folderUnlockInput?.value ?? '';
+  if (!password) {
+    setFolderUnlockError('Введите пароль');
+    elements.folderUnlockInput?.focus({ preventScroll: true });
+    return;
+  }
+
+  setFolderUnlockBusy(true);
+  try {
+    const valid = await verifyFolderPassword(folder, password);
+    if (!valid) {
+      setFolderUnlockError('Неверный пароль');
+      setFolderUnlockBusy(false);
+      elements.folderUnlockInput?.focus({ preventScroll: true });
+      return;
+    }
+    setFolderUnlocked(folderId, true);
+    scheduleInactivityLock();
+    closeFolderUnlockModal();
+    render();
+  } catch (error) {
+    setFolderUnlockError('Не удалось проверить пароль');
+    setFolderUnlockBusy(false);
+  }
+}
+
+async function handleFolderPasswordSubmit(event) {
+  event.preventDefault();
+  if (passwordModalState.busy) {
+    return;
+  }
+  const { mode, folderId } = passwordModalState;
+  const folder = getFolderById(folderId);
+  if (!folder) {
+    closeFolderPasswordModal();
+    return;
+  }
+
+  const currentPassword = elements.folderPasswordCurrent?.value ?? '';
+  const newPassword = elements.folderPasswordNew?.value ?? '';
+  const confirmPassword = elements.folderPasswordConfirm?.value ?? '';
+  const hint = elements.folderPasswordHint?.value ?? '';
+
+  if ((mode === 'change' || mode === 'remove') && !currentPassword) {
+    setFolderPasswordError('Введите текущий пароль');
+    elements.folderPasswordCurrent?.focus({ preventScroll: true });
+    return;
+  }
+
+  if ((mode === 'set' || mode === 'change')) {
+    if (newPassword.trim().length < PASSWORD_MIN_LENGTH) {
+      setFolderPasswordError(`Минимум ${PASSWORD_MIN_LENGTH} символа`);
+      elements.folderPasswordNew?.focus({ preventScroll: true });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setFolderPasswordError('Пароли не совпадают');
+      elements.folderPasswordConfirm?.focus({ preventScroll: true });
+      return;
+    }
+  }
+
+  setFolderPasswordBusy(true);
+
+  try {
+    if (mode === 'change' || mode === 'remove') {
+      const valid = await verifyFolderPassword(folder, currentPassword);
+      if (!valid) {
+        setFolderPasswordError('Неверный пароль');
+        setFolderPasswordBusy(false);
+        elements.folderPasswordCurrent?.focus({ preventScroll: true });
+        return;
+      }
+    }
+
+    if (mode === 'remove') {
+      setFolderUnlocked(folderId, false);
+      applyFolderPasswordUpdate(folder, { hash: null, salt: null, hint: '' });
+      closeFolderPasswordModal();
+      return;
+    }
+
+    const salt = generatePasswordSalt();
+    const hash = await hashPasswordWithSalt(newPassword, salt);
+    setFolderUnlocked(folderId, false);
+    applyFolderPasswordUpdate(folder, { hash, salt, hint });
+    closeFolderPasswordModal();
+  } catch (error) {
+    setFolderPasswordError('Не удалось сохранить пароль');
+    setFolderPasswordBusy(false);
+  }
 }
 
 function addFolder(name, { parentId } = {}) {
@@ -3376,7 +3957,7 @@ function handleFolderClick(event) {
   const item = event.target.closest('.folder-item');
   if (!item) return;
   const folderId = item.dataset.folderId;
-  selectFolder(folderId, { openTasks: true });
+  openFolderWithUnlock(folderId, { openTasks: true });
 }
 
 function handleFolderKeydown(event) {
@@ -3404,7 +3985,7 @@ function handleFolderKeydown(event) {
 
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
-    selectFolder(folderId, { openTasks: true });
+    openFolderWithUnlock(folderId, { openTasks: true });
   }
 }
 
@@ -3416,6 +3997,15 @@ function handleFolderMenuClick(event) {
 
   if (action === 'rename') {
     startFolderRename(folderMenuState.folderId);
+  } else if (action === 'password-set') {
+    openFolderPasswordModal(folderMenuState.folderId, 'set');
+  } else if (action === 'password-change') {
+    openFolderPasswordModal(folderMenuState.folderId, 'change');
+  } else if (action === 'password-remove') {
+    openFolderPasswordModal(folderMenuState.folderId, 'remove');
+  } else if (action === 'lock-again') {
+    setFolderUnlocked(folderMenuState.folderId, false);
+    render();
   } else if (action === 'view-list') {
     setFolderViewMode(folderMenuState.folderId, VIEW_MODES.LIST);
   } else if (action === 'view-week') {
@@ -3492,6 +4082,7 @@ function deleteFolder(folderId) {
   let viewModeContextChanged = false;
   descendants.forEach((id) => {
     weekViewState.delete(id);
+    setFolderUnlocked(id, false);
     if (uiContext.folderViewModes && typeof uiContext.folderViewModes === 'object' && uiContext.folderViewModes[id]) {
       delete uiContext.folderViewModes[id];
       viewModeContextChanged = true;
@@ -3538,6 +4129,7 @@ function openFolderMenu(folderId, anchor) {
     deleteItem.classList.toggle('hidden', PROTECTED_FOLDER_IDS.has(folderId));
   }
   updateFolderMenuViewState(folderId);
+  updateFolderMenuLockState(folderId);
   const rect = anchor.getBoundingClientRect();
   const width = menu.offsetWidth;
   menu.style.top = `${rect.bottom + window.scrollY + 6}px`;
@@ -3725,6 +4317,9 @@ function selectFolder(folderId, { openTasks = false, skipPersist = false } = {})
   }
 
   const previousFolderId = state.ui.selectedFolderId;
+  if (previousFolderId && previousFolderId !== folderId) {
+    lockFolderIfNeeded(previousFolderId);
+  }
   if (previousFolderId !== folderId) {
     weekAutoScrollState.delete(folderId);
   }
@@ -3775,6 +4370,10 @@ function handleAddTaskInline({ forceComposerOnRoot = false } = {}) {
 
   const usingFoldersList = currentScreen === 'folders';
   const folderId = usingFoldersList ? null : state.ui.selectedFolderId;
+  if (!usingFoldersList && requiresFolderUnlock(folderId)) {
+    openFolderUnlockModal(folderId);
+    return;
+  }
   const usingWeekView = !usingFoldersList && isWeekViewActive(folderId);
   let targetList = usingFoldersList ? elements.folderList : elements.taskList;
   let plannedFor;
@@ -3988,7 +4587,7 @@ function handleTaskListClick(event) {
   if (subfolderItem) {
     const folderId = subfolderItem.dataset.folderId;
     if (folderId) {
-      selectFolder(folderId, { openTasks: true });
+      openFolderWithUnlock(folderId, { openTasks: true });
     }
     return;
   }
@@ -4036,6 +4635,11 @@ function handleTaskChange(event) {
     render();
     return;
   }
+  if (task.folderId && requiresFolderUnlock(task.folderId)) {
+    event.preventDefault();
+    openFolderUnlockModal(task.folderId);
+    return;
+  }
 
   if (weekViewActive) {
     if (!task.completed && event.target.checked) {
@@ -4070,7 +4674,7 @@ function handleTaskDblClick(event) {
   if (subfolderItem) {
     const folderId = subfolderItem.dataset.folderId;
     if (folderId) {
-      selectFolder(folderId, { openTasks: true });
+      openFolderWithUnlock(folderId, { openTasks: true });
     }
     return;
   }
@@ -4088,7 +4692,7 @@ function handleTaskKeydown(event) {
     }
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      selectFolder(folderId, { openTasks: true });
+      openFolderWithUnlock(folderId, { openTasks: true });
     }
     return;
   }
@@ -5185,10 +5789,12 @@ function renderFolders() {
       const menuButton = node.querySelector('.folder-menu-button');
 
       nameSpan.textContent = folder.name;
+      const locked = isFolderLocked(folder.id);
+      node.classList.toggle('is-locked', locked);
 
       const totalCount = counts.get(folder.id) ?? 0;
       countSpan.textContent = String(totalCount);
-      if (!showCounter || totalCount === 0) {
+      if (!showCounter || totalCount === 0 || (locked && !isFolderUnlocked(folder.id))) {
         countSpan.style.display = 'none';
       } else {
         countSpan.style.display = '';
@@ -5337,10 +5943,14 @@ function renderRootFolders() {
     }
 
     nameSpan.textContent = folder.name;
+    const locked = isFolderLocked(folder.id);
+    node.classList.toggle('is-locked', locked);
 
     const totalCount = counts.get(folder.id) ?? 0;
     countSpan.textContent = String(totalCount);
-    countSpan.style.display = !showCounter || totalCount === 0 ? 'none' : '';
+    countSpan.style.display = !showCounter || totalCount === 0 || (locked && !isFolderUnlocked(folder.id))
+      ? 'none'
+      : '';
 
     const hideMenu = PROTECTED_FOLDER_IDS.has(folder.id);
     menuButton.classList.toggle('hidden', hideMenu);
@@ -5419,6 +6029,7 @@ function setTasksViewMode(viewMode) {
   elements.weekView?.classList.toggle('hidden', !isWeek);
   elements.weekToolbar?.classList.toggle('hidden', !isWeek);
   elements.weekMenuButton?.classList.toggle('hidden', !isWeek);
+  document.body?.classList.toggle('is-week-wide', isWeek);
   if (!isWeek) {
     closeWeekMenu();
   }
@@ -5486,6 +6097,45 @@ function alignWeekGridToToday(folderId, weekStart) {
     }
     weekAutoScrollState.set(folderId, currentWeekStart);
   });
+}
+
+function scrollWeekGridToDate(isoDate) {
+  if (!elements.weekGrid || !isoDate) {
+    return;
+  }
+  const column = elements.weekGrid.querySelector(`.week-day[data-date="${isoDate}"]`);
+  if (!column) {
+    return;
+  }
+  const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+  requestAnimationFrame(() => {
+    if (!elements.weekGrid || !column.isConnected) {
+      return;
+    }
+    const targetLeft = column.offsetLeft;
+    try {
+      elements.weekGrid.scrollTo({
+        left: targetLeft,
+        behavior: prefersReducedMotion ? 'auto' : 'smooth'
+      });
+    } catch (error) {
+      elements.weekGrid.scrollLeft = targetLeft;
+    }
+  });
+}
+
+function openFolderWithUnlock(folderId, { openTasks = false } = {}) {
+  if (!folderId) {
+    return;
+  }
+  if (requiresFolderUnlock(folderId)) {
+    selectFolder(folderId, { openTasks });
+    if (unlockModalState.folderId !== folderId) {
+      openFolderUnlockModal(folderId);
+    }
+    return;
+  }
+  selectFolder(folderId, { openTasks });
 }
 
 function renderWeekView(folderId = state.ui.selectedFolderId) {
@@ -5636,10 +6286,44 @@ function moveUnfinishedTasksToNextWeek() {
   renderTasks();
 }
 
+function renderLockedFolderState(folderId) {
+  if (!elements.emptyState) {
+    return;
+  }
+  elements.taskList.innerHTML = '';
+  elements.weekGrid.innerHTML = '';
+  elements.taskList.classList.add('hidden');
+  elements.weekView.classList.add('hidden');
+  elements.weekToolbar.classList.add('hidden');
+  elements.weekMenuButton.classList.add('hidden');
+  document.body?.classList.remove('is-week-wide');
+  clearEmptyStateTimer();
+
+  const illustration = elements.emptyState.querySelector('.empty-illustration');
+  if (illustration) {
+    illustration.remove();
+  }
+  const message = elements.emptyState.querySelector('.empty-message');
+  if (message) {
+    message.style.display = '';
+    message.textContent = 'Папка заблокирована';
+    message.dataset.state = 'locked';
+  }
+  elements.emptyState.classList.add('visible');
+}
+
 function renderTasks() {
   cancelInlineComposer(true);
 
   const selectedFolder = state.ui.selectedFolderId;
+  if (requiresFolderUnlock(selectedFolder)) {
+    renderLockedFolderState(selectedFolder);
+    if (currentScreen === 'tasks') {
+      renderTasksHeader(selectedFolder);
+    }
+    updateFloatingAction();
+    return;
+  }
   const useWeekView = isWeekViewActive(selectedFolder);
   setTasksViewMode(useWeekView ? VIEW_MODES.WEEK : VIEW_MODES.LIST);
 
@@ -5697,6 +6381,12 @@ function renderTasks() {
 
   if (selectedFolder === ARCHIVE_FOLDER_ID) {
     tasks = (state.archivedTasks ?? [])
+      .filter((task) => {
+        if (!task?.folderId) {
+          return true;
+        }
+        return !requiresFolderUnlock(task.folderId);
+      })
       .slice()
       .sort((a, b) => {
         const completedA = Number.isFinite(a.completedAt) ? a.completedAt : (a.updatedAt ?? 0);
@@ -5710,7 +6400,10 @@ function renderTasks() {
           return false;
         }
         if (isAllFolder) {
-          return true;
+          if (!task.folderId) {
+            return true;
+          }
+          return !requiresFolderUnlock(task.folderId);
         }
         return task.folderId === selectedFolder;
       })
@@ -5752,9 +6445,11 @@ function renderTasks() {
       }
 
       nameSpan.textContent = folder.name;
+      const locked = isFolderLocked(folder.id);
+      node.classList.toggle('is-locked', locked);
       const totalCount = counts.get(folder.id) ?? 0;
       countSpan.textContent = String(totalCount);
-      if (!showCounter || totalCount === 0) {
+      if (!showCounter || totalCount === 0 || (locked && !isFolderUnlocked(folder.id))) {
         countSpan.style.display = 'none';
       } else {
         countSpan.style.display = '';
@@ -6097,6 +6792,9 @@ if (elements.syncNowButton) {
 
 function showSettingsScreen() {
   resetPullToRefresh({ immediate: true });
+  if (currentScreen === 'tasks') {
+    lockFolderIfNeeded(state?.ui?.selectedFolderId);
+  }
   // Hide other screens
   elements.screenFolders.classList.remove('is-active', 'screen-enter');
   elements.screenTasks.classList.remove('is-active', 'screen-enter');

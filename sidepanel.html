@@ -157,6 +157,12 @@
       <li class="entry-card folder-item" data-folder-id="" tabindex="0" role="button">
         <div class="folder-content">
           <span class="folder-name"></span>
+          <span class="folder-lock-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4" y="10" width="16" height="10" rx="2"></rect>
+              <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+            </svg>
+          </span>
           <span class="folder-count badge"></span>
         </div>
         <button class="folder-menu-button" aria-label="Дополнительные действия" type="button">⋮</button>
@@ -182,6 +188,11 @@
       <button type="button" class="folder-menu-item view-toggle" data-action="view-list" role="menuitemradio" aria-checked="true">List view</button>
       <button type="button" class="folder-menu-item view-toggle" data-action="view-week" role="menuitemradio" aria-checked="false">Week view</button>
       <div class="folder-menu-divider" role="separator"></div>
+      <button type="button" class="folder-menu-item" data-action="password-set">Установить пароль</button>
+      <button type="button" class="folder-menu-item" data-action="password-change">Изменить пароль</button>
+      <button type="button" class="folder-menu-item" data-action="password-remove">Снять пароль</button>
+      <button type="button" class="folder-menu-item" data-action="lock-again">Заблокировать снова</button>
+      <div class="folder-menu-divider" data-divider="password" role="separator"></div>
       <button type="button" class="folder-menu-item" data-action="rename">Переименовать</button>
       <button type="button" class="folder-menu-item" data-action="delete">Удалить</button>
     </div>
@@ -209,6 +220,57 @@
           <footer class="modal-actions">
             <button type="button" id="folderModalCancel" class="ghost-button">Отмена</button>
             <button type="submit" class="primary-button">Сохранить</button>
+          </footer>
+        </form>
+      </div>
+    </section>
+
+    <section id="folderUnlockModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="folderUnlockTitle">
+      <div class="modal-card">
+        <header class="modal-header">
+          <h2 id="folderUnlockTitle" class="modal-title">Папка заблокирована</h2>
+        </header>
+        <form id="folderUnlockForm" class="modal-body" autocomplete="off">
+          <p id="folderUnlockHint" class="modal-hint hidden"></p>
+          <label class="field">
+            <span class="field-label">Пароль</span>
+            <input id="folderUnlockInput" type="password" class="input" autocomplete="current-password" />
+          </label>
+          <p id="folderUnlockError" class="auth-inline-error" role="alert"></p>
+          <footer class="modal-actions">
+            <button type="button" id="folderUnlockCancel" class="ghost-button">Отмена</button>
+            <button type="submit" class="primary-button">Открыть</button>
+          </footer>
+        </form>
+      </div>
+    </section>
+
+    <section id="folderPasswordModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="folderPasswordTitle">
+      <div class="modal-card">
+        <header class="modal-header">
+          <h2 id="folderPasswordTitle" class="modal-title">Пароль</h2>
+        </header>
+        <form id="folderPasswordForm" class="modal-body" autocomplete="off">
+          <label id="folderPasswordCurrentField" class="field hidden">
+            <span class="field-label">Текущий пароль</span>
+            <input id="folderPasswordCurrent" type="password" class="input" autocomplete="current-password" />
+          </label>
+          <label id="folderPasswordNewField" class="field hidden">
+            <span class="field-label">Новый пароль</span>
+            <input id="folderPasswordNew" type="password" class="input" autocomplete="new-password" minlength="2" />
+          </label>
+          <label id="folderPasswordConfirmField" class="field hidden">
+            <span class="field-label">Повторите пароль</span>
+            <input id="folderPasswordConfirm" type="password" class="input" autocomplete="new-password" minlength="2" />
+          </label>
+          <label id="folderPasswordHintField" class="field hidden">
+            <span class="field-label">Подсказка (необязательно)</span>
+            <input id="folderPasswordHint" type="text" class="input" maxlength="120" />
+          </label>
+          <p id="folderPasswordError" class="auth-inline-error" role="alert"></p>
+          <footer class="modal-actions">
+            <button type="button" id="folderPasswordCancel" class="ghost-button">Отмена</button>
+            <button type="submit" id="folderPasswordSubmit" class="primary-button">Сохранить</button>
           </footer>
         </form>
       </div>
