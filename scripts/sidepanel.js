@@ -121,6 +121,87 @@ function playHaptic(pattern = 'light') {
   return false;
 }
 
+async function copyTextToClipboard(value) {
+  const text = typeof value === 'string' ? value : '';
+  if (!text) {
+    return false;
+  }
+
+  if (navigator?.clipboard?.writeText && (typeof window === 'undefined' || window.isSecureContext)) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      // fallback to execCommand below
+    }
+  }
+
+  if (typeof document === 'undefined') {
+    return false;
+  }
+
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.opacity = '0';
+    textarea.style.pointerEvents = 'none';
+    document.body.appendChild(textarea);
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    const copied = document.execCommand('copy');
+    textarea.remove();
+    return copied;
+  } catch (error) {
+    return false;
+  }
+}
+
+function findTaskTextById(taskId) {
+  if (!taskId || !state) {
+    return '';
+  }
+  const activeTask = state.tasks?.find((entry) => entry.id === taskId);
+  if (activeTask?.text) {
+    return activeTask.text;
+  }
+  const archivedTask = state.archivedTasks?.find((entry) => entry.id === taskId);
+  if (archivedTask?.text) {
+    return archivedTask.text;
+  }
+  return '';
+}
+
+async function copyTaskText(taskId, button) {
+  const text = findTaskTextById(taskId);
+  if (!text) {
+    return;
+  }
+
+  const success = await copyTextToClipboard(text);
+  if (success) {
+    playHaptic('light');
+  }
+
+  if (!button) {
+    return;
+  }
+
+  if (button._copyFeedbackTimer) {
+    clearTimeout(button._copyFeedbackTimer);
+  }
+  button.classList.remove('is-copied');
+  if (success) {
+    button.classList.add('is-copied');
+    button._copyFeedbackTimer = setTimeout(() => {
+      button.classList.remove('is-copied');
+      button._copyFeedbackTimer = null;
+    }, 1000);
+  }
+}
+
 const folderMenuState = {
   visible: false,
   folderId: null
@@ -492,6 +573,22 @@ const PROTECTED_FOLDER_IDS = new Set([
 ]);
 
 const ALLOWED_LINK_PROTOCOLS = new Set(['http:', 'https:', 'ftp:', 'sftp:']);
+const DISALLOWED_PREVIEW_TLDS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif',
+  'mp4', 'webm', 'ogg', 'mov', 'm4v', 'mp3', 'wav', 'flac',
+  'pdf', 'txt', 'csv', 'json', 'xml', 'md', 'log',
+  'zip', 'rar', '7z', 'tar', 'gz',
+  'apk', 'ipa', 'exe', 'dmg', 'pkg', 'msi'
+]);
+const COMMON_NAKED_DOMAIN_TLDS = new Set([
+  'com', 'net', 'org', 'io', 'co', 'ru', 'de', 'fr', 'it', 'es',
+  'pl', 'nl', 'be', 'ch', 'at', 'se', 'no', 'fi', 'dk', 'cz',
+  'sk', 'hu', 'ro', 'bg', 'hr', 'si', 'ee', 'lt', 'lv', 'ua',
+  'by', 'kz', 'md', 'tr', 'gr', 'pt', 'ie', 'is', 'us', 'ca',
+  'mx', 'br', 'ar', 'cl', 'co', 'pe', 'au', 'nz', 'za', 'ae',
+   'in', 'jp', 'kr', 'cn', 'hk', 'sg', 'my', 'id', 'th',
+  'vn', 'ph', 'tw', 'il', 'me', 'app', 'dev', 'ai', 'info', 'biz'
+]);
 const LINKIFY_PATTERN = /(\[([^\]]+)\]\(([^)]+)\))|((?:https?|ftp):\/\/[^\s<>()]+|(?:www\.)[^\s<>()]+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<>()]*)?)/gi;
 
 function ensureSystemFolders(state) {
@@ -1250,6 +1347,76 @@ function normalizeUrl(rawValue) {
   }
 }
 
+function isIpHost(hostname) {
+  if (!hostname) {
+    return false;
+  }
+  if (hostname.includes(':')) {
+    return true; // IPv6
+  }
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname);
+}
+
+function shouldLinkifyUrl(href, { rawUrl } = {}) {
+  if (!href) {
+    return false;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(href);
+  } catch (error) {
+    return false;
+  }
+
+  if (!ALLOWED_LINK_PROTOCOLS.has(parsed.protocol)) {
+    return false;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (!hostname) {
+    return false;
+  }
+  if (isIpHost(hostname)) {
+    return true;
+  }
+  if (!hostname.includes('.')) {
+    return false;
+  }
+
+  const tld = hostname.split('.').pop() || '';
+  if (!tld) {
+    return false;
+  }
+  if (!/^(?:[a-z]{2,24}|xn--[a-z0-9-]{2,59})$/.test(tld)) {
+    return false;
+  }
+  if (DISALLOWED_PREVIEW_TLDS.has(tld)) {
+    return false;
+  }
+
+  const raw = typeof rawUrl === 'string' ? rawUrl.trim().toLowerCase() : '';
+  const hasExplicitScheme = /^[a-z][\w+.-]*:/i.test(raw);
+  const hasWwwPrefix = raw.startsWith('www.');
+  if (!hasExplicitScheme && !hasWwwPrefix && !COMMON_NAKED_DOMAIN_TLDS.has(tld)) {
+    return false;
+  }
+
+  return true;
+}
+
+function shouldCreateLinkPreview(href, { rawUrl } = {}) {
+  if (!shouldLinkifyUrl(href, { rawUrl })) {
+    return false;
+  }
+  try {
+    const parsed = new URL(href);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch (error) {
+    return false;
+  }
+}
+
 function createLinkElement({ href, label }) {
   const anchor = document.createElement('a');
   anchor.className = 'task-link';
@@ -1484,6 +1651,11 @@ function createLinkifiedFragment(text, options = {}) {
       lastIndex = matchEnd;
       continue;
     }
+    if (!shouldLinkifyUrl(normalized, { rawUrl })) {
+      appendTextWithBreaks(fragment, fullMatch);
+      lastIndex = matchEnd;
+      continue;
+    }
 
     if (!isMarkdown && hideHref && normalized === hideHref) {
       if (replacementText) {
@@ -1544,6 +1716,9 @@ function extractFirstLink(text) {
 
     const normalized = normalizeUrl(rawUrl);
     if (!normalized) {
+      continue;
+    }
+    if (!shouldCreateLinkPreview(normalized, { rawUrl })) {
       continue;
     }
 
@@ -4615,6 +4790,17 @@ function handleTaskListClick(event) {
     const folderId = subfolderItem.dataset.folderId;
     if (folderId) {
       openFolderWithUnlock(folderId, { openTasks: true });
+    }
+    return;
+  }
+
+  const copyButton = event.target.closest('.task-copy-button');
+  if (copyButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const taskId = copyButton.closest('.task-item')?.dataset.taskId;
+    if (taskId) {
+      void copyTaskText(taskId, copyButton);
     }
     return;
   }
